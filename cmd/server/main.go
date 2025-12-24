@@ -1,11 +1,42 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
+
+	"github.com/albachteng/jobqueue/internal/queue"
 )
+
+type server struct {
+	queue queue.Queue[map[string]string]
+}
+
+func newServer() *server {
+	return &server{
+		queue: queue.NewInMemoryQueue[map[string]string](),
+	}
+}
+
+func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
+	var payload map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// TODO: implement enqueue logic
+	w.WriteHeader(http.StatusInternalServerError)
+	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"})
+}
+
+func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
+	// TODO: implement dequeue logic
+	w.WriteHeader(http.StatusInternalServerError)
+	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"})
+}
 
 func main() {
 	port := os.Getenv("PORT")
