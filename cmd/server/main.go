@@ -1,7 +1,9 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -27,15 +29,30 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// TODO: implement enqueue logic
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"})
+	ctx := context.Background()
+	if err := s.queue.Enqueue(ctx, payload); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]string{"status": "enqueued"})
 }
 
 func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
-	// TODO: implement dequeue logic
-	w.WriteHeader(http.StatusInternalServerError)
-	json.NewEncoder(w).Encode(map[string]string{"error": "not implemented"})
+	ctx := context.Background()
+	job, err := s.queue.Dequeue(ctx)
+	if err != nil {
+		if errors.Is(err, queue.ErrEmptyQueue) {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(job)
 }
 
 func main() {
@@ -44,9 +61,13 @@ func main() {
 		port = "8080"
 	}
 
+	srv := newServer()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot)
 	mux.HandleFunc("/health", handleHealth)
+	mux.HandleFunc("POST /jobs", srv.handleEnqueue)
+	mux.HandleFunc("GET /jobs", srv.handleDequeue)
 
 	addr := ":" + port
 	log.Printf("Server starting on %s", addr)
