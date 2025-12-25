@@ -7,19 +7,17 @@ DO NOT: type Worker[T any] struct { ... }
 execute behavior, not types
 workers often deal with side-effects
 best expressed with interfaces
-generics can go inside the envelope, as below:
+generics can go inside the envelope
 */
 
 // HandlerFunc processes a job - for now using map[string]string
 // Later we'll move to Handler interface with JobEnvelope
 type HandlerFunc func(context.Context, map[string]string) error
 
-// Worker processes jobs from a channel
 type Worker struct {
 	handler HandlerFunc
 }
 
-// NewWorker creates a new worker with the given handler
 func NewWorker(handler HandlerFunc) *Worker {
 	return &Worker{
 		handler: handler,
@@ -28,5 +26,17 @@ func NewWorker(handler HandlerFunc) *Worker {
 
 // Start begins processing jobs from the channel until it's closed or context is cancelled
 func (w *Worker) Start(ctx context.Context, jobs <-chan map[string]string) {
-	// TODO: implement
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case job, ok := <-jobs:
+			if !ok {
+				// Channel closed
+				return
+			}
+			// Process job, ignore errors (continue processing)
+			_ = w.handler(ctx, job)
+		}
+	}
 }
