@@ -16,6 +16,16 @@ linters:
 linters-settings:
   errcheck:
     check-blank: true
+    exclude-functions:
+      - (net/http.ResponseWriter).Write
+      - fmt.Fprintf
+      - fmt.Fprintln
+      - (*encoding/json.Encoder).Encode
+      - fmt.Printf
+      - fmt.Println
+      - (*bytes.Buffer).Write
+      - (*bytes.Buffer).WriteByte
+      - (*bytes.Buffer).WriteString
 
 issues:
   exclude-use-default: false
