@@ -1,5 +1,6 @@
-type Result[T any] struct {
-    Value T
-    Err   error
-}
+package api
 
+type Result[T any] struct {
+	Value T
+	Err   error
+}
