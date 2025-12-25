@@ -8,7 +8,6 @@ import (
 	"time"
 )
 
-// TestWorkerProcessesJob verifies a worker can receive and process a job from a channel
 func TestWorkerProcessesJob(t *testing.T) {
 	ctx := context.Background()
 	jobChan := make(chan map[string]string, 1)
@@ -24,19 +23,19 @@ func TestWorkerProcessesJob(t *testing.T) {
 	}
 
 	worker := NewWorker(handler)
-	done := make(chan bool)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		worker.Start(ctx, jobChan)
-		done <- true
 	}()
 
-	// Send a job
 	job := map[string]string{"message": "test job"}
 	jobChan <- job
 	close(jobChan)
 
-	<-done
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -49,7 +48,6 @@ func TestWorkerProcessesJob(t *testing.T) {
 	}
 }
 
-// TestWorkerHandlesMultipleJobs verifies a worker processes all jobs until channel closes
 func TestWorkerHandlesMultipleJobs(t *testing.T) {
 	ctx := context.Background()
 	jobChan := make(chan map[string]string, 10)
@@ -65,20 +63,20 @@ func TestWorkerHandlesMultipleJobs(t *testing.T) {
 	}
 
 	worker := NewWorker(handler)
-	done := make(chan bool)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		worker.Start(ctx, jobChan)
-		done <- true
 	}()
 
-	// Send multiple jobs
 	for i := 0; i < 5; i++ {
 		jobChan <- map[string]string{"id": string(rune(i))}
 	}
 	close(jobChan)
 
-	<-done
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
@@ -88,7 +86,6 @@ func TestWorkerHandlesMultipleJobs(t *testing.T) {
 	}
 }
 
-// TestWorkerRespectsContext verifies worker stops when context is cancelled
 func TestWorkerRespectsContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	jobChan := make(chan map[string]string, 10)
@@ -105,14 +102,20 @@ func TestWorkerRespectsContext(t *testing.T) {
 	}
 
 	worker := NewWorker(handler)
-	done := make(chan bool)
+	done := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		worker.Start(ctx, jobChan)
-		done <- true
 	}()
 
-	// Send jobs but cancel context quickly
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+
 	for i := 0; i < 10; i++ {
 		jobChan <- map[string]string{"id": string(rune(i))}
 	}
@@ -130,13 +133,11 @@ func TestWorkerRespectsContext(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Should have processed fewer than 10 jobs
 	if count >= 10 {
 		t.Errorf("processed %d jobs after cancellation, expected fewer", count)
 	}
 }
 
-// TestWorkerHandlesErrors verifies worker continues processing even if handler returns error
 func TestWorkerHandlesErrors(t *testing.T) {
 	ctx := context.Background()
 	jobChan := make(chan map[string]string, 5)
@@ -149,7 +150,6 @@ func TestWorkerHandlesErrors(t *testing.T) {
 		count++
 		mu.Unlock()
 
-		// Fail on even jobs
 		if count%2 == 0 {
 			return errors.New("simulated error")
 		}
@@ -157,25 +157,24 @@ func TestWorkerHandlesErrors(t *testing.T) {
 	}
 
 	worker := NewWorker(handler)
-	done := make(chan bool)
+	var wg sync.WaitGroup
+	wg.Add(1)
 
 	go func() {
+		defer wg.Done()
 		worker.Start(ctx, jobChan)
-		done <- true
 	}()
 
-	// Send jobs
 	for i := 0; i < 5; i++ {
 		jobChan <- map[string]string{"id": string(rune(i))}
 	}
 	close(jobChan)
 
-	<-done
+	wg.Wait()
 
 	mu.Lock()
 	defer mu.Unlock()
 
-	// All jobs should be attempted despite errors
 	if count != 5 {
 		t.Errorf("processed %d jobs, want 5 (should continue after errors)", count)
 	}
