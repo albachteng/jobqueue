@@ -67,6 +67,34 @@ Run tests with race detection:
 go test -race ./...
 ```
 
+## Logging
+
+The server uses structured logging with slog and automatic log rotation via lumberjack.
+
+### Configuration
+
+Logs are written to both stdout and `logs/server.log` by default. The log file automatically rotates when:
+- File size exceeds 100MB
+- Keeps last 3 rotated files
+- Rotated files are compressed
+- Old logs deleted after 28 days
+
+### Log Levels
+
+Set via code (default is INFO):
+```go
+cfg := logging.DefaultConfig()
+cfg.Level = slog.LevelDebug  // DEBUG, INFO, WARN, ERROR
+```
+
+### Output Format
+
+Logs are in JSON format by default for easy parsing. Example:
+```json
+{"time":"2025-12-26T10:30:00Z","level":"INFO","msg":"server starting","address":":8080"}
+{"time":"2025-12-26T10:30:05Z","level":"ERROR","msg":"job handler error","error":"timeout","job":{"id":"123"}}
+```
+
 ## Development
 
 ### Linting
