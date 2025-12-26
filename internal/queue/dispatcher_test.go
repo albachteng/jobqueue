@@ -25,7 +25,7 @@ func TestDispatcherStartsWorkers(t *testing.T) {
 		return nil
 	}
 
-	dispatcher := NewDispatcher(q, 2, handler) 
+	dispatcher := NewDispatcher(q, 2, handler)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

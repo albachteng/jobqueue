@@ -1,6 +1,9 @@
 package queue
 
-import "context"
+import (
+	"context"
+	"log"
+)
 
 /*
 DO NOT: type Worker[T any] struct { ... }
@@ -35,8 +38,10 @@ func (w *Worker) Start(ctx context.Context, jobs <-chan map[string]string) {
 				// Channel closed
 				return
 			}
-			// Process job, ignore errors (continue processing)
-			_ = w.handler(ctx, job)
+			// Process job, log errors but continue processing
+			if err := w.handler(ctx, job); err != nil {
+				log.Printf("worker: job handler error: %v", err)
+			}
 		}
 	}
 }
