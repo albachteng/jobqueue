@@ -5,10 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
+	"github.com/albachteng/jobqueue/internal/logging"
 	"github.com/albachteng/jobqueue/internal/queue"
 )
 
@@ -56,6 +56,10 @@ func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
+	logCfg := logging.DefaultConfig()
+	logCfg.OutputFile = "logs/server.log"
+	logger := logging.New(logCfg)
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
@@ -70,9 +74,10 @@ func main() {
 	mux.HandleFunc("GET /jobs", srv.handleDequeue)
 
 	addr := ":" + port
-	log.Printf("Server starting on %s", addr)
+	logger.Info("server starting", "address", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
-		log.Fatal(err)
+		logger.Error("server failed", "error", err)
+		os.Exit(1)
 	}
 }
 
