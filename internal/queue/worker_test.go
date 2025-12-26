@@ -22,7 +22,7 @@ func TestWorkerProcessesJob(t *testing.T) {
 		return nil
 	}
 
-	worker := NewWorker(handler, nil)
+	worker := NewWorker(handler)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -62,7 +62,7 @@ func TestWorkerHandlesMultipleJobs(t *testing.T) {
 		return nil
 	}
 
-	worker := NewWorker(handler, nil)
+	worker := NewWorker(handler)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -101,7 +101,7 @@ func TestWorkerRespectsContext(t *testing.T) {
 		return nil
 	}
 
-	worker := NewWorker(handler, nil)
+	worker := NewWorker(handler)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -156,7 +156,7 @@ func TestWorkerHandlesErrors(t *testing.T) {
 		return nil
 	}
 
-	worker := NewWorker(handler, nil)
+	worker := NewWorker(handler)
 	var wg sync.WaitGroup
 	wg.Add(1)
 

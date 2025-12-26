@@ -25,7 +25,7 @@ func TestDispatcherStartsWorkers(t *testing.T) {
 		return nil
 	}
 
-	dispatcher := NewDispatcher(q, 2, handler, nil)
+	dispatcher := NewDispatcher(q, 2, handler)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -77,7 +77,7 @@ func TestDispatcherConcurrentProcessing(t *testing.T) {
 	}
 
 	numWorkers := 3
-	dispatcher := NewDispatcher(q, numWorkers, handler, nil)
+	dispatcher := NewDispatcher(q, numWorkers, handler)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -121,7 +121,7 @@ func TestDispatcherGracefulShutdown(t *testing.T) {
 		return nil
 	}
 
-	dispatcher := NewDispatcher(q, 2, handler, nil)
+	dispatcher := NewDispatcher(q, 2, handler)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 
@@ -156,7 +156,7 @@ func TestDispatcherHandlesEmptyQueue(t *testing.T) {
 		return nil
 	}
 
-	dispatcher := NewDispatcher(q, 2, handler, nil)
+	dispatcher := NewDispatcher(q, 2, handler)
 
 	dispatchCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
@@ -183,7 +183,7 @@ func TestDispatcherStopWithoutStart(t *testing.T) {
 		return nil
 	}
 
-	dispatcher := NewDispatcher(q, 2, handler, nil)
+	dispatcher := NewDispatcher(q, 2, handler)
 
 	dispatcher.Stop()
 }

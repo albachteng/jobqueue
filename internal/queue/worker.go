@@ -2,7 +2,7 @@ package queue
 
 import (
 	"context"
-	"log/slog"
+	"log"
 )
 
 /*
@@ -19,16 +19,11 @@ type HandlerFunc func(context.Context, map[string]string) error
 
 type Worker struct {
 	handler HandlerFunc
-	logger  *slog.Logger
 }
 
-func NewWorker(handler HandlerFunc, logger *slog.Logger) *Worker {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func NewWorker(handler HandlerFunc) *Worker {
 	return &Worker{
 		handler: handler,
-		logger:  logger,
 	}
 }
 
@@ -45,9 +40,7 @@ func (w *Worker) Start(ctx context.Context, jobs <-chan map[string]string) {
 			}
 			// Process job, log errors but continue processing
 			if err := w.handler(ctx, job); err != nil {
-				w.logger.Error("job handler error",
-					"error", err,
-					"job", job)
+				log.Printf("worker: job handler error: %v", err)
 			}
 		}
 	}
