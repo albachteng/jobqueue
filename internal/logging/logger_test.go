@@ -14,7 +14,7 @@ func TestNewDefault(t *testing.T) {
 		t.Fatal("NewDefault returned nil logger")
 	}
 
-	// Should not panic 
+	// Should not panic
 	logger.Info("test message")
 }
 
