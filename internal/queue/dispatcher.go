@@ -3,7 +3,6 @@ package queue
 import (
 	"context"
 	"errors"
-	"log/slog"
 	"sync"
 	"time"
 )
@@ -13,23 +12,19 @@ type Dispatcher struct {
 	queue      Queue[map[string]string]
 	numWorkers int
 	handler    HandlerFunc
-	logger     *slog.Logger
 	jobChan    chan map[string]string
 	wg         sync.WaitGroup
 }
 
-func NewDispatcher(queue Queue[map[string]string], numWorkers int, handler HandlerFunc, logger *slog.Logger) *Dispatcher {
-	if logger == nil {
-		logger = slog.Default()
-	}
+func NewDispatcher(queue Queue[map[string]string], numWorkers int, handler HandlerFunc) *Dispatcher {
 	return &Dispatcher{
 		queue:      queue,
 		numWorkers: numWorkers,
 		handler:    handler,
-		logger:     logger,
 	}
 }
 
+// Start begins the dispatcher - pulls jobs from queue and sends to workers
 func (d *Dispatcher) Start(ctx context.Context) error {
 	d.jobChan = make(chan map[string]string, d.numWorkers)
 
@@ -37,7 +32,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 		d.wg.Add(1)
 		go func() {
 			defer d.wg.Done()
-			worker := NewWorker(d.handler, d.logger)
+			worker := NewWorker(d.handler)
 			worker.Start(ctx, d.jobChan)
 		}()
 	}
