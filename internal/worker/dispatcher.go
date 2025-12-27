@@ -1,4 +1,4 @@
-package queue
+package worker
 
 import (
 	"context"
@@ -8,19 +8,21 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/queue"
+	"github.com/albachteng/jobqueue/internal/tracking"
 )
 
 type Dispatcher struct {
-	queue      Queue[*jobs.Envelope]
+	queue      queue.Queue[*jobs.Envelope]
 	numWorkers int
 	registry   *jobs.Registry
-	tracker    *jobs.JobTracker
+	tracker    *tracking.JobTracker
 	logger     *slog.Logger
 	jobChan    chan *jobs.Envelope
 	wg         sync.WaitGroup
 }
 
-func NewDispatcher(queue Queue[*jobs.Envelope], numWorkers int, registry *jobs.Registry, tracker *jobs.JobTracker, logger *slog.Logger) *Dispatcher {
+func NewDispatcher(queue queue.Queue[*jobs.Envelope], numWorkers int, registry *jobs.Registry, tracker *tracking.JobTracker, logger *slog.Logger) *Dispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -55,7 +57,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 			default:
 				job, err := d.queue.Dequeue(ctx)
 				if err != nil {
-					if errors.Is(err, ErrEmptyQueue) {
+					if errors.Is(err, queue.ErrEmptyQueue) {
 						time.Sleep(10 * time.Millisecond)
 						continue
 					}

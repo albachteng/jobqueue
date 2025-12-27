@@ -1,4 +1,4 @@
-package queue
+package worker
 
 import (
 	"context"
@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/tracking"
 )
 
 // testBackoff returns a minimal delay for testing
@@ -20,7 +21,7 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		ctx := context.Background()
 		jobChan := make(chan *jobs.Envelope, 1)
 		registry := jobs.NewRegistry()
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 
 		attemptCount := 0
 		var mu sync.Mutex
@@ -64,8 +65,8 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		}
 
 		info, _ := tracker.Get("retry-123")
-		if info.Status != jobs.StatusFailed {
-			t.Errorf("got status %q, want %q", info.Status, jobs.StatusFailed)
+		if info.Status != tracking.StatusFailed {
+			t.Errorf("got status %q, want %q", info.Status, tracking.StatusFailed)
 		}
 
 		if info.Envelope.Attempts != 4 {
@@ -77,7 +78,7 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		ctx := context.Background()
 		jobChan := make(chan *jobs.Envelope, 1)
 		registry := jobs.NewRegistry()
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 
 		attemptCount := 0
 		var mu sync.Mutex
@@ -126,8 +127,8 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		}
 
 		info, _ := tracker.Get("eventual-success-123")
-		if info.Status != jobs.StatusCompleted {
-			t.Errorf("got status %q, want %q", info.Status, jobs.StatusCompleted)
+		if info.Status != tracking.StatusCompleted {
+			t.Errorf("got status %q, want %q", info.Status, tracking.StatusCompleted)
 		}
 	})
 
@@ -135,7 +136,7 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		ctx := context.Background()
 		jobChan := make(chan *jobs.Envelope, 1)
 		registry := jobs.NewRegistry()
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 
 		attemptCount := 0
 		var mu sync.Mutex
@@ -179,8 +180,8 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		}
 
 		info, _ := tracker.Get("no-retry-123")
-		if info.Status != jobs.StatusFailed {
-			t.Errorf("got status %q, want %q", info.Status, jobs.StatusFailed)
+		if info.Status != tracking.StatusFailed {
+			t.Errorf("got status %q, want %q", info.Status, tracking.StatusFailed)
 		}
 	})
 
@@ -188,7 +189,7 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		ctx := context.Background()
 		jobChan := make(chan *jobs.Envelope, 1)
 		registry := jobs.NewRegistry()
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 
 		attemptCount := 0
 		var mu sync.Mutex
@@ -232,8 +233,8 @@ func TestWorker_RetryOnFailure(t *testing.T) {
 		}
 
 		info, _ := tracker.Get("success-123")
-		if info.Status != jobs.StatusCompleted {
-			t.Errorf("got status %q, want %q", info.Status, jobs.StatusCompleted)
+		if info.Status != tracking.StatusCompleted {
+			t.Errorf("got status %q, want %q", info.Status, tracking.StatusCompleted)
 		}
 	})
 }
@@ -279,7 +280,7 @@ func TestCalculateBackoff(t *testing.T) {
 
 func TestJobTracker_RetryTracking(t *testing.T) {
 	t.Run("tracks retry attempts in envelope", func(t *testing.T) {
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 		envelope := &jobs.Envelope{
 			ID:         "track-retry-123",
 			Type:       "test",
@@ -309,7 +310,7 @@ func TestJobTracker_RetryTracking(t *testing.T) {
 	})
 
 	t.Run("distinguishes retried failures from permanent failures", func(t *testing.T) {
-		tracker := jobs.NewJobTracker()
+		tracker := tracking.NewJobTracker()
 
 		retryJob := &jobs.Envelope{
 			ID:         "will-retry",

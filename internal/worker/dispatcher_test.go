@@ -1,4 +1,4 @@
-package queue
+package worker
 
 import (
 	"context"
@@ -7,11 +7,12 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/queue"
 )
 
 func TestDispatcher_StartsWorkers(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	for i := 0; i < 5; i++ {
@@ -56,7 +57,7 @@ func TestDispatcher_StartsWorkers(t *testing.T) {
 
 func TestDispatcher_RoutesEnvelopes(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	for i := 0; i < 3; i++ {
@@ -118,7 +119,7 @@ func TestDispatcher_RoutesEnvelopes(t *testing.T) {
 
 func TestDispatcher_ConcurrentProcessing(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	numJobs := 10
@@ -181,7 +182,7 @@ func TestDispatcher_ConcurrentProcessing(t *testing.T) {
 
 func TestDispatcher_GracefulShutdown(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	for i := 0; i < 5; i++ {
@@ -230,7 +231,7 @@ func TestDispatcher_GracefulShutdown(t *testing.T) {
 
 func TestDispatcher_HandlesEmptyQueue(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	var count int
@@ -271,7 +272,7 @@ func TestDispatcher_HandlesEmptyQueue(t *testing.T) {
 }
 
 func TestDispatcher_StopWithoutStart(t *testing.T) {
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
@@ -287,7 +288,7 @@ func TestDispatcher_StopWithoutStart(t *testing.T) {
 
 func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	for i := 0; i < 10; i++ {
@@ -336,7 +337,7 @@ func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 
 func TestDispatcher_NoJobProcessedTwice(t *testing.T) {
 	ctx := context.Background()
-	q := NewInMemoryQueue[*jobs.Envelope]()
+	q := queue.NewInMemoryQueue[*jobs.Envelope]()
 	registry := jobs.NewRegistry()
 
 	numJobs := 20
