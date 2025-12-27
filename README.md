@@ -52,7 +52,20 @@ JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
 
 # 3. Check job status
 curl -s http://localhost:8080/jobs/$JOB_ID | jq
-# Output: {"Envelope":{...},"Status":"completed","Error":"","StartedAt":"...","FinishedAt":"..."}
+# Output: {
+#   "Envelope": {
+#     "id": "abc123...",
+#     "type": "echo",
+#     "payload": {"message": "hello world"},
+#     "attempts": 1,
+#     "max_retries": 0,
+#     ...
+#   },
+#   "Status": "completed",
+#   "Error": "",
+#   "StartedAt": "2025-12-27T...",
+#   "FinishedAt": "2025-12-27T..."
+# }
 
 # 4. List all jobs
 curl -s http://localhost:8080/jobs | jq
@@ -62,6 +75,22 @@ curl -s "http://localhost:8080/jobs?status=completed" | jq
 ```
 
 Jobs are automatically processed by background workers. Use the status endpoints to track progress.
+
+## Retry Logic
+
+The job queue supports automatic retries with exponential backoff for failed jobs:
+
+- **MaxRetries**: Maximum number of retries (default 0 = no retries)
+- **Attempts**: Tracks how many times the job has been attempted
+- **Backoff**: Exponential delay between retries (100ms base, 30s max)
+  - Attempt 1: 100ms delay
+  - Attempt 2: 200ms delay
+  - Attempt 3: 400ms delay
+  - Attempt 8+: 30s delay (capped)
+
+Jobs are marked as `failed` only after exhausting all retries. The `Attempts` field in the job status shows how many times the job was attempted.
+
+**Note**: Currently, retry configuration is set in code when registering job handlers. Future versions will support setting `MaxRetries` via the API.
 
 ## Testing
 
