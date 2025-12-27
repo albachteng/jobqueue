@@ -1,16 +1,18 @@
-package jobs
+package tracking
 
 import (
 	"errors"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
 func TestJobTracker_Register(t *testing.T) {
 	t.Run("registers job with pending status", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "test-123",
 			Type: "test",
 		}
@@ -35,8 +37,8 @@ func TestJobTracker_Register(t *testing.T) {
 		tracker := NewJobTracker()
 
 		for i := 0; i < 5; i++ {
-			envelope := &Envelope{
-				ID:   JobID("job-" + string(rune('a'+i))),
+			envelope := &jobs.Envelope{
+				ID:   jobs.JobID("job-" + string(rune('a'+i))),
 				Type: "test",
 			}
 			tracker.Register(envelope)
@@ -52,7 +54,7 @@ func TestJobTracker_Register(t *testing.T) {
 func TestJobTracker_Get(t *testing.T) {
 	t.Run("returns job info for existing job", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "exists-123",
 			Type: "test",
 		}
@@ -83,7 +85,7 @@ func TestJobTracker_Get(t *testing.T) {
 func TestJobTracker_MarkProcessing(t *testing.T) {
 	t.Run("updates status to processing", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "proc-123",
 			Type: "test",
 		}
@@ -118,7 +120,7 @@ func TestJobTracker_MarkProcessing(t *testing.T) {
 func TestJobTracker_MarkCompleted(t *testing.T) {
 	t.Run("updates status to completed", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "complete-123",
 			Type: "test",
 		}
@@ -154,7 +156,7 @@ func TestJobTracker_MarkCompleted(t *testing.T) {
 func TestJobTracker_MarkFailed(t *testing.T) {
 	t.Run("updates status to failed with error", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "failed-123",
 			Type: "test",
 		}
@@ -196,9 +198,9 @@ func TestJobTracker_List(t *testing.T) {
 	t.Run("returns all jobs", func(t *testing.T) {
 		tracker := NewJobTracker()
 
-		tracker.Register(&Envelope{ID: "job-1", Type: "test"})
-		tracker.Register(&Envelope{ID: "job-2", Type: "test"})
-		tracker.Register(&Envelope{ID: "job-3", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "job-1", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "job-2", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "job-3", Type: "test"})
 
 		jobs := tracker.List()
 
@@ -222,11 +224,11 @@ func TestJobTracker_ListByStatus(t *testing.T) {
 	t.Run("filters jobs by status", func(t *testing.T) {
 		tracker := NewJobTracker()
 
-		tracker.Register(&Envelope{ID: "pending-1", Type: "test"})
-		tracker.Register(&Envelope{ID: "pending-2", Type: "test"})
-		tracker.Register(&Envelope{ID: "processing-1", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "pending-1", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "pending-2", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "processing-1", Type: "test"})
 		tracker.MarkProcessing("processing-1")
-		tracker.Register(&Envelope{ID: "completed-1", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "completed-1", Type: "test"})
 		tracker.MarkCompleted("completed-1")
 
 		pending := tracker.ListByStatus(StatusPending)
@@ -247,7 +249,7 @@ func TestJobTracker_ListByStatus(t *testing.T) {
 
 	t.Run("returns empty list for status with no jobs", func(t *testing.T) {
 		tracker := NewJobTracker()
-		tracker.Register(&Envelope{ID: "job-1", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "job-1", Type: "test"})
 
 		failed := tracker.ListByStatus(StatusFailed)
 
@@ -266,8 +268,8 @@ func TestJobTracker_Concurrency(t *testing.T) {
 			wg.Add(1)
 			go func(id int) {
 				defer wg.Done()
-				jobID := JobID("concurrent-" + string(rune('a'+id)))
-				tracker.Register(&Envelope{ID: jobID, Type: "test"})
+				jobID := jobs.JobID("concurrent-" + string(rune('a'+id)))
+				tracker.Register(&jobs.Envelope{ID: jobID, Type: "test"})
 				tracker.MarkProcessing(jobID)
 				if id%2 == 0 {
 					tracker.MarkCompleted(jobID)
@@ -294,7 +296,7 @@ func TestJobTracker_Concurrency(t *testing.T) {
 
 	t.Run("concurrent reads and writes", func(t *testing.T) {
 		tracker := NewJobTracker()
-		tracker.Register(&Envelope{ID: "read-write-test", Type: "test"})
+		tracker.Register(&jobs.Envelope{ID: "read-write-test", Type: "test"})
 
 		var wg sync.WaitGroup
 		for i := 0; i < 100; i++ {
@@ -324,7 +326,7 @@ func TestJobTracker_Concurrency(t *testing.T) {
 func TestJobTracker_StatusTransitions(t *testing.T) {
 	t.Run("tracks complete job lifecycle", func(t *testing.T) {
 		tracker := NewJobTracker()
-		envelope := &Envelope{
+		envelope := &jobs.Envelope{
 			ID:   "lifecycle-test",
 			Type: "test",
 		}

@@ -1,4 +1,4 @@
-package queue
+package worker
 
 import (
 	"context"
@@ -7,18 +7,19 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/tracking"
 )
 
 type BackoffFunc func(attempt int) time.Duration
 
 type Worker struct {
 	registry  *jobs.Registry
-	tracker   *jobs.JobTracker
+	tracker   *tracking.JobTracker
 	logger    *slog.Logger
 	backoffFn BackoffFunc
 }
 
-func NewWorker(registry *jobs.Registry, tracker *jobs.JobTracker, logger *slog.Logger) *Worker {
+func NewWorker(registry *jobs.Registry, tracker *tracking.JobTracker, logger *slog.Logger) *Worker {
 	if logger == nil {
 		logger = slog.Default()
 	}
