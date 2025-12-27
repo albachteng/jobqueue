@@ -282,7 +282,6 @@ func TestDispatcher_StopWithoutStart(t *testing.T) {
 
 	dispatcher := NewDispatcher(q, 2, registry, nil)
 
-	// Should not panic
 	dispatcher.Stop()
 }
 
@@ -306,7 +305,6 @@ func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
 		mu.Lock()
 		count++
-		// This would need worker ID to be passed, simplified for now
 		mu.Unlock()
 		time.Sleep(10 * time.Millisecond)
 		return nil
@@ -333,7 +331,6 @@ func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 		t.Errorf("processed %d jobs, want 10", count)
 	}
 
-	// All workers should use same registry (verified by successful processing)
 	_ = uniqueWorkers
 }
 

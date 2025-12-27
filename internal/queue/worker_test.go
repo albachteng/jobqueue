@@ -4,12 +4,117 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
 )
+
+type testLogRecord struct {
+	level   slog.Level
+	message string
+	attrs   map[string]any
+}
+
+type testLogger struct {
+	mu      sync.Mutex
+	records []testLogRecord
+}
+
+func newTestLogger() *testLogger {
+	return &testLogger{
+		records: make([]testLogRecord, 0),
+	}
+}
+
+func (l *testLogger) handler() slog.Handler {
+	return &testLogHandler{logger: l}
+}
+
+func (l *testLogger) getRecords() []testLogRecord {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	records := make([]testLogRecord, len(l.records))
+	copy(records, l.records)
+	return records
+}
+
+func (l *testLogger) hasMessage(msg string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range l.records {
+		if r.message == msg {
+			return true
+		}
+	}
+	return false
+}
+
+func (l *testLogger) hasAttr(key string, value any) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, r := range l.records {
+		if v, ok := r.attrs[key]; ok && v == value {
+			return true
+		}
+	}
+	return false
+}
+
+type testLogHandler struct {
+	logger *testLogger
+	attrs  []slog.Attr
+	groups []string
+}
+
+func (h *testLogHandler) Enabled(ctx context.Context, level slog.Level) bool {
+	return true
+}
+
+func (h *testLogHandler) Handle(ctx context.Context, record slog.Record) error {
+	h.logger.mu.Lock()
+	defer h.logger.mu.Unlock()
+
+	attrs := make(map[string]any)
+	for _, attr := range h.attrs {
+		attrs[attr.Key] = attr.Value.Any()
+	}
+	record.Attrs(func(attr slog.Attr) bool {
+		attrs[attr.Key] = attr.Value.Any()
+		return true
+	})
+
+	h.logger.records = append(h.logger.records, testLogRecord{
+		level:   record.Level,
+		message: record.Message,
+		attrs:   attrs,
+	})
+	return nil
+}
+
+func (h *testLogHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	newAttrs := make([]slog.Attr, len(h.attrs)+len(attrs))
+	copy(newAttrs, h.attrs)
+	copy(newAttrs[len(h.attrs):], attrs)
+	return &testLogHandler{
+		logger: h.logger,
+		attrs:  newAttrs,
+		groups: h.groups,
+	}
+}
+
+func (h *testLogHandler) WithGroup(name string) slog.Handler {
+	newGroups := make([]string, len(h.groups)+1)
+	copy(newGroups, h.groups)
+	newGroups[len(h.groups)] = name
+	return &testLogHandler{
+		logger: h.logger,
+		attrs:  h.attrs,
+		groups: newGroups,
+	}
+}
 
 func TestWorker_ProcessesEnvelopes(t *testing.T) {
 	ctx := context.Background()
@@ -429,38 +534,26 @@ func TestWorker_UnknownJobType(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Should process the known job, log error for unknown, and not crash
 	if knownCount != 1 {
 		t.Errorf("processed %d known jobs, want 1", knownCount)
 	}
 }
 
 func TestWorker_LogsJobCompletionWithIDAndType(t *testing.T) {
-	// This test would require capturing log output
-	// For now, we're just testing that the worker processes the job
-	// In a real implementation, you'd use a test logger
-
 	ctx := context.Background()
 	jobChan := make(chan *jobs.Envelope, 1)
 	registry := jobs.NewRegistry()
 
-	var completed bool
-	var completedID jobs.JobID
-	var completedType jobs.JobType
-	var mu sync.Mutex
-
 	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
-		mu.Lock()
-		completed = true
-		completedID = env.ID
-		completedType = env.Type
-		mu.Unlock()
 		return nil
 	})
 
 	registry.Register("logged", handler)
 
-	worker := NewWorker(registry, nil)
+	testLog := newTestLogger()
+	logger := slog.New(testLog.handler())
+
+	worker := NewWorker(registry, logger)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -479,16 +572,62 @@ func TestWorker_LogsJobCompletionWithIDAndType(t *testing.T) {
 
 	wg.Wait()
 
-	mu.Lock()
-	defer mu.Unlock()
+	if !testLog.hasMessage("job completed") {
+		t.Error("expected 'job completed' log message")
+	}
 
-	if !completed {
-		t.Error("job was not completed")
+	if !testLog.hasAttr("job_id", jobs.JobID("logged-123")) {
+		t.Error("expected log to include job_id attribute")
 	}
-	if completedID != envelope.ID {
-		t.Errorf("completed ID %q, want %q", completedID, envelope.ID)
+
+	if !testLog.hasAttr("job_type", jobs.JobType("logged")) {
+		t.Error("expected log to include job_type attribute")
 	}
-	if completedType != envelope.Type {
-		t.Errorf("completed Type %q, want %q", completedType, envelope.Type)
+}
+
+func TestWorker_LogsErrors(t *testing.T) {
+	ctx := context.Background()
+	jobChan := make(chan *jobs.Envelope, 1)
+	registry := jobs.NewRegistry()
+
+	expectedErr := errors.New("handler error")
+	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+		return expectedErr
+	})
+
+	registry.Register("error", handler)
+
+	testLog := newTestLogger()
+	logger := slog.New(testLog.handler())
+
+	worker := NewWorker(registry, logger)
+	var wg sync.WaitGroup
+	wg.Add(1)
+
+	go func() {
+		defer wg.Done()
+		worker.Start(ctx, jobChan)
+	}()
+
+	envelope := &jobs.Envelope{
+		ID:     "error-123",
+		Type:   "error",
+		Status: "pending",
+	}
+	jobChan <- envelope
+	close(jobChan)
+
+	wg.Wait()
+
+	if !testLog.hasMessage("job handler error") {
+		t.Error("expected 'job handler error' log message")
+	}
+
+	if !testLog.hasAttr("job_id", jobs.JobID("error-123")) {
+		t.Error("expected error log to include job_id attribute")
+	}
+
+	if !testLog.hasAttr("job_type", jobs.JobType("error")) {
+		t.Error("expected error log to include job_type attribute")
 	}
 }
