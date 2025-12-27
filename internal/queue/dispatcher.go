@@ -6,40 +6,44 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
-// Dispatcher pulls jobs from a queue and distributes them to a worker pool
 type Dispatcher struct {
-	queue      Queue[map[string]string]
+	queue      Queue[*jobs.Envelope]
 	numWorkers int
-	handler    HandlerFunc
+	registry   *jobs.Registry
+	tracker    *jobs.JobTracker
 	logger     *slog.Logger
-	jobChan    chan map[string]string
+	jobChan    chan *jobs.Envelope
 	wg         sync.WaitGroup
 }
 
-func NewDispatcher(queue Queue[map[string]string], numWorkers int, handler HandlerFunc, logger *slog.Logger) *Dispatcher {
+func NewDispatcher(queue Queue[*jobs.Envelope], numWorkers int, registry *jobs.Registry, tracker *jobs.JobTracker, logger *slog.Logger) *Dispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Dispatcher{
 		queue:      queue,
 		numWorkers: numWorkers,
-		handler:    handler,
+		registry:   registry,
+		tracker:    tracker,
 		logger:     logger,
 	}
 }
 
 func (d *Dispatcher) Start(ctx context.Context) error {
-	d.jobChan = make(chan map[string]string, d.numWorkers)
+	d.logger.Info("dispatcher starting", "num_workers", d.numWorkers)
+	d.jobChan = make(chan *jobs.Envelope, d.numWorkers)
 
 	for i := 0; i < d.numWorkers; i++ {
 		d.wg.Add(1)
-		go func() {
+		go func(workerID int) {
 			defer d.wg.Done()
-			worker := NewWorker(d.handler, d.logger)
+			worker := NewWorker(d.registry, d.tracker, d.logger.With("worker_id", workerID))
 			worker.Start(ctx, d.jobChan)
-		}()
+		}(i)
 	}
 
 	go func() {
@@ -55,7 +59,6 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 						time.Sleep(10 * time.Millisecond)
 						continue
 					}
-					// Other error (context cancelled, etc)
 					close(d.jobChan)
 					return
 				}
@@ -67,7 +70,8 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully shuts down the dispatcher, waiting for in-flight jobs to complete
 func (d *Dispatcher) Stop() {
+	d.logger.Info("dispatcher stopping")
 	d.wg.Wait()
+	d.logger.Info("dispatcher stopped")
 }
