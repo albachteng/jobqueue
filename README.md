@@ -32,20 +32,36 @@ PORT=3000 go run ./cmd/server
 
 - `GET /` - Hello World
 - `GET /health` - Health check
-- `POST /jobs` - Enqueue a job (JSON payload)
-- `GET /jobs` - Dequeue a job (returns JSON)
+- `POST /jobs` - Enqueue a job (JSON payload with `type` and `payload`)
+- `GET /jobs/{id}` - Get job status by ID
+- `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed`)
 
-### Example Usage
+### End-to-End Example
 
 ```bash
-# Enqueue a job
-curl -X POST http://localhost:8080/jobs \
+# 1. Enqueue a job
+RESPONSE=$(curl -s -X POST http://localhost:8080/jobs \
   -H "Content-Type: application/json" \
-  -d '{"message": "hello world"}'
+  -d '{"type": "echo", "payload": {"message": "hello world"}}')
 
-# Dequeue a job
-curl http://localhost:8080/jobs
+echo "Enqueued: $RESPONSE"
+# Output: {"job_id":"abc123...","status":"enqueued"}
+
+# 2. Extract job ID
+JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
+
+# 3. Check job status
+curl -s http://localhost:8080/jobs/$JOB_ID | jq
+# Output: {"Envelope":{...},"Status":"completed","Error":"","StartedAt":"...","FinishedAt":"..."}
+
+# 4. List all jobs
+curl -s http://localhost:8080/jobs | jq
+
+# 5. Filter by status
+curl -s "http://localhost:8080/jobs?status=completed" | jq
 ```
+
+Jobs are automatically processed by background workers. Use the status endpoints to track progress.
 
 ## Testing
 
@@ -73,8 +89,8 @@ The server uses structured logging with slog and automatic log rotation via lumb
 
 ### Configuration
 
-Logs are written to both stdout and `logs/server.log` by default. The log file automatically rotates when:
-- File size exceeds 100MB
+Logs are written to both stdout and `logs/server.log` by default. The log file automatically rotates when file size exceeds 100MB.
+
 - Keeps last 3 rotated files
 - Rotated files are compressed
 - Old logs deleted after 28 days
