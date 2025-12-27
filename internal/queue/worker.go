@@ -12,10 +12,10 @@ import (
 type BackoffFunc func(attempt int) time.Duration
 
 type Worker struct {
-	registry   *jobs.Registry
-	tracker    *jobs.JobTracker
-	logger     *slog.Logger
-	backoffFn  BackoffFunc
+	registry  *jobs.Registry
+	tracker   *jobs.JobTracker
+	logger    *slog.Logger
+	backoffFn BackoffFunc
 }
 
 func NewWorker(registry *jobs.Registry, tracker *jobs.JobTracker, logger *slog.Logger) *Worker {
