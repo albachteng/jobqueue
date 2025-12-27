@@ -27,14 +27,6 @@ func (l *testLogger) handler() slog.Handler {
 	return &testLogHandler{logger: l}
 }
 
-func (l *testLogger) getRecords() []testLogRecord {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	records := make([]testLogRecord, len(l.records))
-	copy(records, l.records)
-	return records
-}
-
 func (l *testLogger) hasMessage(msg string) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -78,12 +70,6 @@ func (l *testLogger) errorCount() int {
 		}
 	}
 	return count
-}
-
-func (l *testLogger) clear() {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.records = make([]testLogRecord, 0)
 }
 
 type testLogHandler struct {

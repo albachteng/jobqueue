@@ -3,8 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 
@@ -26,12 +26,16 @@ type EnqueueResponse struct {
 type server struct {
 	queue    queue.Queue[*jobs.Envelope]
 	registry *jobs.Registry
+	tracker  *jobs.JobTracker
+	logger   *slog.Logger
 }
 
-func newServer(registry *jobs.Registry) *server {
+func newServer(registry *jobs.Registry, logger *slog.Logger) *server {
 	return &server{
 		queue:    queue.NewInMemoryQueue[*jobs.Envelope](),
 		registry: registry,
+		tracker:  jobs.NewJobTracker(),
+		logger:   logger,
 	}
 }
 
@@ -53,10 +57,16 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	s.tracker.Register(envelope)
+
 	if err := s.queue.Enqueue(r.Context(), envelope); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	s.logger.Info("job enqueued",
+		"job_id", envelope.ID,
+		"job_type", envelope.Type)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(EnqueueResponse{
@@ -65,19 +75,31 @@ func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
-	envelope, err := s.queue.Dequeue(r.Context())
-	if err != nil {
-		if errors.Is(err, queue.ErrEmptyQueue) {
-			w.WriteHeader(http.StatusNoContent)
-			return
-		}
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+func (s *server) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	jobID := jobs.JobID(r.PathValue("id"))
+
+	info, exists := s.tracker.Get(jobID)
+	if !exists {
+		http.Error(w, "job not found", http.StatusNotFound)
 		return
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(envelope)
+	json.NewEncoder(w).Encode(info)
+}
+
+func (s *server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	statusFilter := r.URL.Query().Get("status")
+
+	var jobList []*jobs.JobInfo
+	if statusFilter != "" {
+		jobList = s.tracker.ListByStatus(jobs.JobStatus(statusFilter))
+	} else {
+		jobList = s.tracker.List()
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(jobList)
 }
 
 func main() {
@@ -92,13 +114,16 @@ func main() {
 		return nil
 	}))
 
-	srv := newServer(registry)
+	srv := newServer(registry, logger)
 
-	dispatcher := queue.NewDispatcher(srv.queue, 5, registry, logger)
+	dispatcher := queue.NewDispatcher(srv.queue, 5, registry, srv.tracker, logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	dispatcher.Start(ctx)
+	if err := dispatcher.Start(ctx); err != nil {
+		logger.Error("failed to start dispatcher", "error", err)
+		os.Exit(1)
+	}
 	defer dispatcher.Stop()
 
 	port := os.Getenv("PORT")
@@ -110,7 +135,8 @@ func main() {
 	mux.HandleFunc("/", handleRoot)
 	mux.HandleFunc("/health", handleHealth)
 	mux.HandleFunc("POST /jobs", srv.handleEnqueue)
-	mux.HandleFunc("GET /jobs", srv.handleDequeue)
+	mux.HandleFunc("GET /jobs/{id}", srv.handleGetJob)
+	mux.HandleFunc("GET /jobs", srv.handleListJobs)
 
 	addr := ":" + port
 	logger.Info("server starting", "address", addr)

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -24,7 +25,7 @@ func newTestServer() *server {
 		return nil
 	}))
 
-	return newServer(registry)
+	return newServer(registry, slog.Default())
 }
 
 func TestHandleRoot(t *testing.T) {
@@ -150,13 +151,13 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 	})
 }
 
-func TestHTTP_DequeueJob(t *testing.T) {
-	t.Run("returns full envelope", func(t *testing.T) {
+func TestHTTP_GetJob(t *testing.T) {
+	t.Run("returns job info by ID", func(t *testing.T) {
 		srv := newTestServer()
 
 		reqBody := EnqueueRequest{
 			Type:    "echo",
-			Payload: json.RawMessage(`{"message": "test"}`),
+			Payload: json.RawMessage(`{"message":"test"}`),
 		}
 		body, _ := json.Marshal(reqBody)
 
@@ -165,90 +166,136 @@ func TestHTTP_DequeueJob(t *testing.T) {
 		enqW := httptest.NewRecorder()
 		srv.handleEnqueue(enqW, enqReq)
 
-		deqReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-		deqW := httptest.NewRecorder()
-		srv.handleDequeue(deqW, deqReq)
+		var enqResp EnqueueResponse
+		json.NewDecoder(enqW.Body).Decode(&enqResp)
 
-		if deqW.Code != http.StatusOK {
-			t.Errorf("got status %d, want %d", deqW.Code, http.StatusOK)
+		getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+string(enqResp.JobID), nil)
+		getReq.SetPathValue("id", string(enqResp.JobID))
+		getW := httptest.NewRecorder()
+		srv.handleGetJob(getW, getReq)
+
+		if getW.Code != http.StatusOK {
+			t.Errorf("got status %d, want %d", getW.Code, http.StatusOK)
 		}
 
-		var envelope jobs.Envelope
-		if err := json.NewDecoder(deqW.Body).Decode(&envelope); err != nil {
-			t.Fatalf("failed to decode envelope: %v", err)
+		var jobInfo jobs.JobInfo
+		if err := json.NewDecoder(getW.Body).Decode(&jobInfo); err != nil {
+			t.Fatalf("failed to decode job info: %v", err)
 		}
 
-		if envelope.ID == "" {
-			t.Error("expected non-empty envelope ID")
+		if jobInfo.Envelope.ID != enqResp.JobID {
+			t.Errorf("got job ID %q, want %q", jobInfo.Envelope.ID, enqResp.JobID)
 		}
 
-		if envelope.Type != "echo" {
-			t.Errorf("got type %q, want %q", envelope.Type, "echo")
-		}
-
-		if len(envelope.Payload) == 0 {
-			t.Error("expected non-empty payload")
-		}
-
-		if envelope.Status != "pending" {
-			t.Errorf("got status %q, want %q", envelope.Status, "pending")
+		if jobInfo.Status != jobs.StatusPending {
+			t.Errorf("got status %q, want %q", jobInfo.Status, jobs.StatusPending)
 		}
 	})
 
-	t.Run("returns 204 for empty queue", func(t *testing.T) {
+	t.Run("returns 404 for unknown job ID", func(t *testing.T) {
+		srv := newTestServer()
+
+		req := httptest.NewRequest(http.MethodGet, "/jobs/unknown-id", nil)
+		req.SetPathValue("id", "unknown-id")
+		w := httptest.NewRecorder()
+
+		srv.handleGetJob(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Errorf("got status %d, want %d", w.Code, http.StatusNotFound)
+		}
+	})
+}
+
+func TestHTTP_ListJobs(t *testing.T) {
+	t.Run("returns all jobs", func(t *testing.T) {
+		srv := newTestServer()
+
+		for i := 0; i < 3; i++ {
+			reqBody := EnqueueRequest{
+				Type:    "echo",
+				Payload: json.RawMessage(`{}`),
+			}
+			body, _ := json.Marshal(reqBody)
+			req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+			srv.handleEnqueue(w, req)
+		}
+
+		listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+		listW := httptest.NewRecorder()
+		srv.handleListJobs(listW, listReq)
+
+		if listW.Code != http.StatusOK {
+			t.Errorf("got status %d, want %d", listW.Code, http.StatusOK)
+		}
+
+		var jobList []*jobs.JobInfo
+		if err := json.NewDecoder(listW.Body).Decode(&jobList); err != nil {
+			t.Fatalf("failed to decode job list: %v", err)
+		}
+
+		if len(jobList) != 3 {
+			t.Errorf("got %d jobs, want 3", len(jobList))
+		}
+	})
+
+	t.Run("filters jobs by status", func(t *testing.T) {
+		srv := newTestServer()
+
+		reqBody := EnqueueRequest{
+			Type:    "echo",
+			Payload: json.RawMessage(`{}`),
+		}
+		body, _ := json.Marshal(reqBody)
+		req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		srv.handleEnqueue(w, req)
+
+		listReq := httptest.NewRequest(http.MethodGet, "/jobs?status=pending", nil)
+		listW := httptest.NewRecorder()
+		srv.handleListJobs(listW, listReq)
+
+		if listW.Code != http.StatusOK {
+			t.Errorf("got status %d, want %d", listW.Code, http.StatusOK)
+		}
+
+		var jobList []*jobs.JobInfo
+		json.NewDecoder(listW.Body).Decode(&jobList)
+
+		if len(jobList) != 1 {
+			t.Errorf("got %d pending jobs, want 1", len(jobList))
+		}
+
+		if len(jobList) > 0 && jobList[0].Status != jobs.StatusPending {
+			t.Errorf("got status %q, want %q", jobList[0].Status, jobs.StatusPending)
+		}
+	})
+
+	t.Run("returns empty list when no jobs", func(t *testing.T) {
 		srv := newTestServer()
 
 		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		w := httptest.NewRecorder()
+		srv.handleListJobs(w, req)
 
-		srv.handleDequeue(w, req)
-
-		if w.Code != http.StatusNoContent {
-			t.Errorf("got status %d, want %d", w.Code, http.StatusNoContent)
+		if w.Code != http.StatusOK {
+			t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
 		}
-	})
 
-	t.Run("includes all envelope fields in response", func(t *testing.T) {
-		srv := newTestServer()
+		var jobList []*jobs.JobInfo
+		json.NewDecoder(w.Body).Decode(&jobList)
 
-		reqBody := EnqueueRequest{
-			Type:    "echo",
-			Payload: json.RawMessage(`{"data": "value"}`),
-		}
-		body, _ := json.Marshal(reqBody)
-
-		enqReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
-		enqReq.Header.Set("Content-Type", "application/json")
-		enqW := httptest.NewRecorder()
-		srv.handleEnqueue(enqW, enqReq)
-
-		deqReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-		deqW := httptest.NewRecorder()
-		srv.handleDequeue(deqW, deqReq)
-
-		var envelope jobs.Envelope
-		json.NewDecoder(deqW.Body).Decode(&envelope)
-
-		if envelope.ID == "" {
-			t.Error("missing ID")
-		}
-		if envelope.Type == "" {
-			t.Error("missing Type")
-		}
-		if len(envelope.Payload) == 0 {
-			t.Error("missing Payload")
-		}
-		if envelope.CreatedAt.IsZero() {
-			t.Error("missing CreatedAt")
-		}
-		if envelope.Status == "" {
-			t.Error("missing Status")
+		if len(jobList) != 0 {
+			t.Errorf("got %d jobs, want 0", len(jobList))
 		}
 	})
 }
 
 func TestHTTP_EndToEnd(t *testing.T) {
-	t.Run("enqueue and dequeue preserves data", func(t *testing.T) {
+	t.Run("enqueue and get job preserves data", func(t *testing.T) {
 		srv := newTestServer()
 
 		originalPayload := json.RawMessage(`{"message":"hello world","priority":5}`)
@@ -266,23 +313,24 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		var enqResp EnqueueResponse
 		json.NewDecoder(enqW.Body).Decode(&enqResp)
 
-		deqReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-		deqW := httptest.NewRecorder()
-		srv.handleDequeue(deqW, deqReq)
+		getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+string(enqResp.JobID), nil)
+		getReq.SetPathValue("id", string(enqResp.JobID))
+		getW := httptest.NewRecorder()
+		srv.handleGetJob(getW, getReq)
 
-		var envelope jobs.Envelope
-		json.NewDecoder(deqW.Body).Decode(&envelope)
+		var jobInfo jobs.JobInfo
+		json.NewDecoder(getW.Body).Decode(&jobInfo)
 
-		if envelope.ID != enqResp.JobID {
-			t.Errorf("job ID mismatch: enqueued %s, dequeued %s", enqResp.JobID, envelope.ID)
+		if jobInfo.Envelope.ID != enqResp.JobID {
+			t.Errorf("job ID mismatch: enqueued %s, got %s", enqResp.JobID, jobInfo.Envelope.ID)
 		}
 
-		if string(envelope.Payload) != string(originalPayload) {
-			t.Errorf("payload mismatch:\nenqueued: %s\ndequeued: %s", originalPayload, envelope.Payload)
+		if string(jobInfo.Envelope.Payload) != string(originalPayload) {
+			t.Errorf("payload mismatch:\nenqueued: %s\ngot: %s", originalPayload, jobInfo.Envelope.Payload)
 		}
 	})
 
-	t.Run("multiple job types maintain order", func(t *testing.T) {
+	t.Run("enqueues multiple job types", func(t *testing.T) {
 		srv := newTestServer()
 
 		srv.registry.MustRegister("email", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
@@ -316,26 +364,15 @@ func TestHTTP_EndToEnd(t *testing.T) {
 			}
 		}
 
-		for i, want := range testJobs {
-			req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-			w := httptest.NewRecorder()
+		listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+		listW := httptest.NewRecorder()
+		srv.handleListJobs(listW, listReq)
 
-			srv.handleDequeue(w, req)
+		var jobList []*jobs.JobInfo
+		json.NewDecoder(listW.Body).Decode(&jobList)
 
-			if w.Code != http.StatusOK {
-				t.Fatalf("dequeue %d failed with status %d", i, w.Code)
-			}
-
-			var envelope jobs.Envelope
-			json.NewDecoder(w.Body).Decode(&envelope)
-
-			if envelope.Type != want.typ {
-				t.Errorf("job %d: got type %s, want %s (FIFO order broken)", i, envelope.Type, want.typ)
-			}
-
-			if string(envelope.Payload) != want.payload {
-				t.Errorf("job %d: payload mismatch", i)
-			}
+		if len(jobList) != 3 {
+			t.Fatalf("got %d jobs, want 3", len(jobList))
 		}
 	})
 
@@ -353,7 +390,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 
 		registry.MustRegister("integration", handler)
 
-		srv := newServer(registry)
+		srv := newServer(registry, slog.Default())
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -423,31 +460,6 @@ func TestHTTP_ContextPropagation(t *testing.T) {
 		}
 	})
 
-	t.Run("handleDequeue uses request context", func(t *testing.T) {
-		srv := newTestServer()
-
-		var capturedCtx context.Context
-		mockQueue := &contextCapturingQueue{
-			onDequeue: func(ctx context.Context) (*jobs.Envelope, error) {
-				capturedCtx = ctx
-				return nil, queue.ErrEmptyQueue
-			},
-		}
-		srv.queue = mockQueue
-
-		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
-		w := httptest.NewRecorder()
-
-		srv.handleDequeue(w, req)
-
-		if capturedCtx == nil {
-			t.Fatal("context was not passed to queue.Dequeue")
-		}
-
-		if capturedCtx != req.Context() {
-			t.Error("handleDequeue should use request context, not a different context")
-		}
-	})
 }
 
 type contextCapturingQueue struct {

@@ -31,7 +31,7 @@ func TestWorker_ProcessesEnvelopes(t *testing.T) {
 
 	registry.Register("test", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -86,7 +86,7 @@ func TestWorker_HandlesMultipleJobTypes(t *testing.T) {
 	registry.Register("echo", echoHandler)
 	registry.Register("email", emailHandler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -150,7 +150,7 @@ func TestWorker_HandlersReceiveCorrectPayloads(t *testing.T) {
 
 	registry.Register("echo", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -196,7 +196,7 @@ func TestWorker_HandlesMultipleJobs(t *testing.T) {
 
 	registry.Register("counter", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -242,7 +242,7 @@ func TestWorker_RespectsContext(t *testing.T) {
 
 	registry.Register("slow", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -300,7 +300,7 @@ func TestWorker_StopsWhenChannelClosed(t *testing.T) {
 
 	registry.Register("close", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(1)
@@ -359,7 +359,7 @@ func TestWorker_HandlesErrors(t *testing.T) {
 
 	registry.Register("errors", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -404,7 +404,7 @@ func TestWorker_UnknownJobType(t *testing.T) {
 
 	registry.Register("known", handler)
 
-	worker := NewWorker(registry, nil)
+	worker := NewWorker(registry, nil, nil)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -449,7 +449,7 @@ func TestWorker_LogsJobCompletionWithIDAndType(t *testing.T) {
 	testLog := newTestLogger()
 	logger := slog.New(testLog.handler())
 
-	worker := NewWorker(registry, logger)
+	worker := NewWorker(registry, nil, logger)
 	var wg sync.WaitGroup
 	wg.Add(1)
 
@@ -496,7 +496,7 @@ func TestWorker_LogsErrors(t *testing.T) {
 	testLog := newTestLogger()
 	logger := slog.New(testLog.handler())
 
-	worker := NewWorker(registry, logger)
+	worker := NewWorker(registry, nil, logger)
 	var wg sync.WaitGroup
 	wg.Add(1)
 

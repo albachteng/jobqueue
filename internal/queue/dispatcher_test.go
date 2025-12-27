@@ -35,7 +35,7 @@ func TestDispatcher_StartsWorkers(t *testing.T) {
 
 	registry.Register("test", handler)
 
-	dispatcher := NewDispatcher(q, 2, registry, nil)
+	dispatcher := NewDispatcher(q, 2, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -94,7 +94,7 @@ func TestDispatcher_RoutesEnvelopes(t *testing.T) {
 	registry.Register("echo", echoHandler)
 	registry.Register("email", emailHandler)
 
-	dispatcher := NewDispatcher(q, 2, registry, nil)
+	dispatcher := NewDispatcher(q, 2, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -156,7 +156,7 @@ func TestDispatcher_ConcurrentProcessing(t *testing.T) {
 	registry.Register("concurrent", handler)
 
 	numWorkers := 3
-	dispatcher := NewDispatcher(q, numWorkers, registry, nil)
+	dispatcher := NewDispatcher(q, numWorkers, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -207,7 +207,7 @@ func TestDispatcher_GracefulShutdown(t *testing.T) {
 
 	registry.Register("shutdown", handler)
 
-	dispatcher := NewDispatcher(q, 2, registry, nil)
+	dispatcher := NewDispatcher(q, 2, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 
@@ -245,7 +245,7 @@ func TestDispatcher_HandlesEmptyQueue(t *testing.T) {
 
 	registry.Register("delayed", handler)
 
-	dispatcher := NewDispatcher(q, 2, registry, nil)
+	dispatcher := NewDispatcher(q, 2, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithTimeout(ctx, 100*time.Millisecond)
 	defer cancel()
@@ -280,7 +280,7 @@ func TestDispatcher_StopWithoutStart(t *testing.T) {
 
 	registry.Register("noop", handler)
 
-	dispatcher := NewDispatcher(q, 2, registry, nil)
+	dispatcher := NewDispatcher(q, 2, registry, nil, nil)
 
 	dispatcher.Stop()
 }
@@ -313,7 +313,7 @@ func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 	registry.Register("shared", handler)
 
 	numWorkers := 3
-	dispatcher := NewDispatcher(q, numWorkers, registry, nil)
+	dispatcher := NewDispatcher(q, numWorkers, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -362,7 +362,7 @@ func TestDispatcher_NoJobProcessedTwice(t *testing.T) {
 	registry.Register("unique", handler)
 
 	numWorkers := 4
-	dispatcher := NewDispatcher(q, numWorkers, registry, nil)
+	dispatcher := NewDispatcher(q, numWorkers, registry, nil, nil)
 
 	dispatchCtx, cancel := context.WithCancel(ctx)
 	defer cancel()

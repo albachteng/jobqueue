@@ -14,12 +14,13 @@ type Dispatcher struct {
 	queue      Queue[*jobs.Envelope]
 	numWorkers int
 	registry   *jobs.Registry
+	tracker    *jobs.JobTracker
 	logger     *slog.Logger
 	jobChan    chan *jobs.Envelope
 	wg         sync.WaitGroup
 }
 
-func NewDispatcher(queue Queue[*jobs.Envelope], numWorkers int, registry *jobs.Registry, logger *slog.Logger) *Dispatcher {
+func NewDispatcher(queue Queue[*jobs.Envelope], numWorkers int, registry *jobs.Registry, tracker *jobs.JobTracker, logger *slog.Logger) *Dispatcher {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -27,18 +28,20 @@ func NewDispatcher(queue Queue[*jobs.Envelope], numWorkers int, registry *jobs.R
 		queue:      queue,
 		numWorkers: numWorkers,
 		registry:   registry,
+		tracker:    tracker,
 		logger:     logger,
 	}
 }
 
 func (d *Dispatcher) Start(ctx context.Context) error {
+	d.logger.Info("dispatcher starting", "num_workers", d.numWorkers)
 	d.jobChan = make(chan *jobs.Envelope, d.numWorkers)
 
 	for i := 0; i < d.numWorkers; i++ {
 		d.wg.Add(1)
 		go func(workerID int) {
 			defer d.wg.Done()
-			worker := NewWorker(d.registry, d.logger.With("worker_id", workerID))
+			worker := NewWorker(d.registry, d.tracker, d.logger.With("worker_id", workerID))
 			worker.Start(ctx, d.jobChan)
 		}(i)
 	}
@@ -68,5 +71,7 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 }
 
 func (d *Dispatcher) Stop() {
+	d.logger.Info("dispatcher stopping")
 	d.wg.Wait()
+	d.logger.Info("dispatcher stopped")
 }
