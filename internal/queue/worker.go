@@ -3,51 +3,44 @@ package queue
 import (
 	"context"
 	"log/slog"
+
+	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
-/*
-DO NOT: type Worker[T any] struct { ... }
-execute behavior, not types
-workers often deal with side-effects
-best expressed with interfaces
-generics can go inside the envelope
-*/
-
-// HandlerFunc processes a job - for now using map[string]string
-// Later we'll move to Handler interface with JobEnvelope
-type HandlerFunc func(context.Context, map[string]string) error
-
 type Worker struct {
-	handler HandlerFunc
-	logger  *slog.Logger
+	registry *jobs.Registry
+	logger   *slog.Logger
 }
 
-func NewWorker(handler HandlerFunc, logger *slog.Logger) *Worker {
+func NewWorker(registry *jobs.Registry, logger *slog.Logger) *Worker {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &Worker{
-		handler: handler,
-		logger:  logger,
+		registry: registry,
+		logger:   logger,
 	}
 }
 
-// Start begins processing jobs from the channel until it's closed or context is cancelled
-func (w *Worker) Start(ctx context.Context, jobs <-chan map[string]string) {
+func (w *Worker) Start(ctx context.Context, jobs <-chan *jobs.Envelope) {
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case job, ok := <-jobs:
+		case envelope, ok := <-jobs:
 			if !ok {
-				// Channel closed
 				return
 			}
-			// Process job, log errors but continue processing
-			if err := w.handler(ctx, job); err != nil {
+
+			if err := w.registry.Handle(ctx, envelope); err != nil {
 				w.logger.Error("job handler error",
 					"error", err,
-					"job", job)
+					"job_id", envelope.ID,
+					"job_type", envelope.Type)
+			} else {
+				w.logger.Info("job completed",
+					"job_id", envelope.ID,
+					"job_type", envelope.Type)
 			}
 		}
 	}

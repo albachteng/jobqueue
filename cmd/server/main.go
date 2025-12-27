@@ -8,40 +8,65 @@ import (
 	"net/http"
 	"os"
 
+	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/logging"
 	"github.com/albachteng/jobqueue/internal/queue"
 )
 
-type server struct {
-	queue queue.Queue[map[string]string]
+type EnqueueRequest struct {
+	Type    jobs.JobType    `json:"type"`
+	Payload json.RawMessage `json:"payload"`
 }
 
-func newServer() *server {
+type EnqueueResponse struct {
+	JobID  jobs.JobID `json:"job_id"`
+	Status string     `json:"status"`
+}
+
+type server struct {
+	queue    queue.Queue[*jobs.Envelope]
+	registry *jobs.Registry
+}
+
+func newServer(registry *jobs.Registry) *server {
 	return &server{
-		queue: queue.NewInMemoryQueue[map[string]string](),
+		queue:    queue.NewInMemoryQueue[*jobs.Envelope](),
+		registry: registry,
 	}
 }
 
 func (s *server) handleEnqueue(w http.ResponseWriter, r *http.Request) {
-	var payload map[string]string
-	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+	var req EnqueueRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	ctx := context.Background()
-	if err := s.queue.Enqueue(ctx, payload); err != nil {
+	if _, err := s.registry.Get(req.Type); err != nil {
+		http.Error(w, fmt.Sprintf("unknown job type: %s", req.Type), http.StatusBadRequest)
+		return
+	}
+
+	envelope, err := jobs.NewEnvelope(req.Type, req.Payload)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.queue.Enqueue(r.Context(), envelope); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{"status": "enqueued"})
+	json.NewEncoder(w).Encode(EnqueueResponse{
+		JobID:  envelope.ID,
+		Status: "enqueued",
+	})
 }
 
 func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
-	ctx := context.Background()
-	job, err := s.queue.Dequeue(ctx)
+	envelope, err := s.queue.Dequeue(r.Context())
 	if err != nil {
 		if errors.Is(err, queue.ErrEmptyQueue) {
 			w.WriteHeader(http.StatusNoContent)
@@ -52,7 +77,7 @@ func (s *server) handleDequeue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(job)
+	json.NewEncoder(w).Encode(envelope)
 }
 
 func main() {
@@ -60,12 +85,26 @@ func main() {
 	logCfg.OutputFile = "logs/server.log"
 	logger := logging.New(logCfg)
 
+	registry := jobs.NewRegistry()
+
+	registry.MustRegister("echo", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+		logger.Info("echo handler", "payload", string(env.Payload))
+		return nil
+	}))
+
+	srv := newServer(registry)
+
+	dispatcher := queue.NewDispatcher(srv.queue, 5, registry, logger)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	dispatcher.Start(ctx)
+	defer dispatcher.Stop()
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "8080"
 	}
-
-	srv := newServer()
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", handleRoot)

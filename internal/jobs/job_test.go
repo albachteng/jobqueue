@@ -110,6 +110,14 @@ func TestNewEnvelope(t *testing.T) {
 		}
 	})
 
+	t.Run("returns error for nil payload", func(t *testing.T) {
+		_, err := NewEnvelope("test", nil)
+
+		if err == nil {
+			t.Error("expected error for nil payload, got nil")
+		}
+	})
+
 	t.Run("accepts json.RawMessage directly", func(t *testing.T) {
 		rawJSON := json.RawMessage(`{"custom": "data"}`)
 
@@ -261,8 +269,8 @@ func TestEnvelope_Serialization(t *testing.T) {
 		original := &Envelope{
 			ID:         "round-trip-123",
 			Type:       "test",
-			Payload:    json.RawMessage(`{"data": "value"}`),
-			CreatedAt:  time.Now().Truncate(time.Second), // Truncate for JSON comparison
+			Payload:    json.RawMessage(`{"data":"value"}`),
+			CreatedAt:  time.Now().Truncate(time.Second),
 			Status:     "pending",
 			Priority:   5,
 			MaxRetries: 3,

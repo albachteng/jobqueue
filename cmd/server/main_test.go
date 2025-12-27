@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/queue"
 )
 
 func newTestServer() *server {
@@ -250,7 +251,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 	t.Run("enqueue and dequeue preserves data", func(t *testing.T) {
 		srv := newTestServer()
 
-		originalPayload := json.RawMessage(`{"message": "hello world", "priority": 5}`)
+		originalPayload := json.RawMessage(`{"message":"hello world","priority":5}`)
 		reqBody := EnqueueRequest{
 			Type:    "echo",
 			Payload: originalPayload,
@@ -288,16 +289,16 @@ func TestHTTP_EndToEnd(t *testing.T) {
 			return nil
 		}))
 
-		jobs := []struct {
+		testJobs := []struct {
 			typ     jobs.JobType
 			payload string
 		}{
-			{"echo", `{"msg": "first"}`},
-			{"email", `{"to": "test@example.com"}`},
-			{"echo", `{"msg": "third"}`},
+			{"echo", `{"msg":"first"}`},
+			{"email", `{"to":"test@example.com"}`},
+			{"echo", `{"msg":"third"}`},
 		}
 
-		for _, job := range jobs {
+		for _, job := range testJobs {
 			reqBody := EnqueueRequest{
 				Type:    job.typ,
 				Payload: json.RawMessage(job.payload),
@@ -315,7 +316,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 			}
 		}
 
-		for i, want := range jobs {
+		for i, want := range testJobs {
 			req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 			w := httptest.NewRecorder()
 
@@ -386,4 +387,84 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		_ = processedCount
 		_ = processedIDs
 	})
+}
+
+func TestHTTP_ContextPropagation(t *testing.T) {
+	t.Run("handleEnqueue uses request context", func(t *testing.T) {
+		srv := newTestServer()
+
+		var capturedCtx context.Context
+		mockQueue := &contextCapturingQueue{
+			onEnqueue: func(ctx context.Context, env *jobs.Envelope) error {
+				capturedCtx = ctx
+				return nil
+			},
+		}
+		srv.queue = mockQueue
+
+		reqBody := EnqueueRequest{
+			Type:    "echo",
+			Payload: json.RawMessage(`{}`),
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		srv.handleEnqueue(w, req)
+
+		if capturedCtx == nil {
+			t.Fatal("context was not passed to queue.Enqueue")
+		}
+
+		if capturedCtx != req.Context() {
+			t.Error("handleEnqueue should use request context, not a different context")
+		}
+	})
+
+	t.Run("handleDequeue uses request context", func(t *testing.T) {
+		srv := newTestServer()
+
+		var capturedCtx context.Context
+		mockQueue := &contextCapturingQueue{
+			onDequeue: func(ctx context.Context) (*jobs.Envelope, error) {
+				capturedCtx = ctx
+				return nil, queue.ErrEmptyQueue
+			},
+		}
+		srv.queue = mockQueue
+
+		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+		w := httptest.NewRecorder()
+
+		srv.handleDequeue(w, req)
+
+		if capturedCtx == nil {
+			t.Fatal("context was not passed to queue.Dequeue")
+		}
+
+		if capturedCtx != req.Context() {
+			t.Error("handleDequeue should use request context, not a different context")
+		}
+	})
+}
+
+type contextCapturingQueue struct {
+	onEnqueue func(ctx context.Context, env *jobs.Envelope) error
+	onDequeue func(ctx context.Context) (*jobs.Envelope, error)
+}
+
+func (m *contextCapturingQueue) Enqueue(ctx context.Context, item *jobs.Envelope) error {
+	if m.onEnqueue != nil {
+		return m.onEnqueue(ctx, item)
+	}
+	return nil
+}
+
+func (m *contextCapturingQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
+	if m.onDequeue != nil {
+		return m.onDequeue(ctx)
+	}
+	return nil, queue.ErrEmptyQueue
 }
