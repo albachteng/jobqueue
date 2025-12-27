@@ -1,8 +1,10 @@
-package jobs
+package tracking
 
 import (
 	"sync"
 	"time"
+
+	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
 type JobStatus string
@@ -15,7 +17,7 @@ const (
 )
 
 type JobInfo struct {
-	Envelope   *Envelope
+	Envelope   *jobs.Envelope
 	Status     JobStatus
 	Error      string
 	StartedAt  *time.Time
@@ -24,16 +26,16 @@ type JobInfo struct {
 
 type JobTracker struct {
 	mu   sync.RWMutex
-	jobs map[JobID]*JobInfo
+	jobs map[jobs.JobID]*JobInfo
 }
 
 func NewJobTracker() *JobTracker {
 	return &JobTracker{
-		jobs: make(map[JobID]*JobInfo),
+		jobs: make(map[jobs.JobID]*JobInfo),
 	}
 }
 
-func (t *JobTracker) Register(envelope *Envelope) {
+func (t *JobTracker) Register(envelope *jobs.Envelope) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -43,7 +45,7 @@ func (t *JobTracker) Register(envelope *Envelope) {
 	}
 }
 
-func (t *JobTracker) MarkProcessing(id JobID) {
+func (t *JobTracker) MarkProcessing(id jobs.JobID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -54,7 +56,7 @@ func (t *JobTracker) MarkProcessing(id JobID) {
 	}
 }
 
-func (t *JobTracker) MarkCompleted(id JobID) {
+func (t *JobTracker) MarkCompleted(id jobs.JobID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -65,7 +67,7 @@ func (t *JobTracker) MarkCompleted(id JobID) {
 	}
 }
 
-func (t *JobTracker) MarkFailed(id JobID, err error) {
+func (t *JobTracker) MarkFailed(id jobs.JobID, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
@@ -77,7 +79,7 @@ func (t *JobTracker) MarkFailed(id JobID, err error) {
 	}
 }
 
-func (t *JobTracker) Get(id JobID) (*JobInfo, bool) {
+func (t *JobTracker) Get(id jobs.JobID) (*JobInfo, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 

@@ -10,11 +10,13 @@ import (
 	"testing"
 	"time"
 
+	"github.com/albachteng/jobqueue/internal/api"
 	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/queue"
+	"github.com/albachteng/jobqueue/internal/tracking"
 )
 
-func newTestServer() *server {
+func newTestServer() *api.Server {
 	registry := jobs.NewRegistry()
 
 	registry.MustRegister("echo", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
@@ -25,14 +27,14 @@ func newTestServer() *server {
 		return nil
 	}))
 
-	return newServer(registry, slog.Default())
+	return api.NewServer(registry, slog.Default())
 }
 
 func TestHandleRoot(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 
-	handleRoot(w, req)
+	api.HandleRoot(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
@@ -48,7 +50,7 @@ func TestHandleHealth(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/health", nil)
 	w := httptest.NewRecorder()
 
-	handleHealth(w, req)
+	api.HandleHealth(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
@@ -64,7 +66,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 	srv := newTestServer()
 
 	t.Run("creates envelope with job type and payload", func(t *testing.T) {
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: json.RawMessage(`{"message": "hello"}`),
 		}
@@ -74,13 +76,13 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		if w.Code != http.StatusCreated {
 			t.Errorf("got status %d, want %d", w.Code, http.StatusCreated)
 		}
 
-		var response EnqueueResponse
+		var response api.EnqueueResponse
 		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
 			t.Fatalf("failed to decode response: %v", err)
 		}
@@ -95,7 +97,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 	})
 
 	t.Run("returns 400 for unknown job type", func(t *testing.T) {
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "unknown",
 			Payload: json.RawMessage(`{}`),
 		}
@@ -105,7 +107,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("got status %d, want %d for unknown job type", w.Code, http.StatusBadRequest)
@@ -117,7 +119,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		if w.Code != http.StatusBadRequest {
 			t.Errorf("got status %d, want %d for invalid JSON", w.Code, http.StatusBadRequest)
@@ -133,7 +135,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 		}
 		payloadJSON, _ := json.Marshal(payload)
 
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: json.RawMessage(payloadJSON),
 		}
@@ -143,7 +145,7 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		if w.Code != http.StatusCreated {
 			t.Errorf("got status %d, want %d", w.Code, http.StatusCreated)
@@ -155,7 +157,7 @@ func TestHTTP_GetJob(t *testing.T) {
 	t.Run("returns job info by ID", func(t *testing.T) {
 		srv := newTestServer()
 
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: json.RawMessage(`{"message":"test"}`),
 		}
@@ -164,21 +166,21 @@ func TestHTTP_GetJob(t *testing.T) {
 		enqReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
 		enqReq.Header.Set("Content-Type", "application/json")
 		enqW := httptest.NewRecorder()
-		srv.handleEnqueue(enqW, enqReq)
+		srv.HandleEnqueue(enqW, enqReq)
 
-		var enqResp EnqueueResponse
+		var enqResp api.EnqueueResponse
 		json.NewDecoder(enqW.Body).Decode(&enqResp)
 
 		getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+string(enqResp.JobID), nil)
 		getReq.SetPathValue("id", string(enqResp.JobID))
 		getW := httptest.NewRecorder()
-		srv.handleGetJob(getW, getReq)
+		srv.HandleGetJob(getW, getReq)
 
 		if getW.Code != http.StatusOK {
 			t.Errorf("got status %d, want %d", getW.Code, http.StatusOK)
 		}
 
-		var jobInfo jobs.JobInfo
+		var jobInfo tracking.JobInfo
 		if err := json.NewDecoder(getW.Body).Decode(&jobInfo); err != nil {
 			t.Fatalf("failed to decode job info: %v", err)
 		}
@@ -187,8 +189,8 @@ func TestHTTP_GetJob(t *testing.T) {
 			t.Errorf("got job ID %q, want %q", jobInfo.Envelope.ID, enqResp.JobID)
 		}
 
-		if jobInfo.Status != jobs.StatusPending {
-			t.Errorf("got status %q, want %q", jobInfo.Status, jobs.StatusPending)
+		if jobInfo.Status != tracking.StatusPending {
+			t.Errorf("got status %q, want %q", jobInfo.Status, tracking.StatusPending)
 		}
 	})
 
@@ -199,7 +201,7 @@ func TestHTTP_GetJob(t *testing.T) {
 		req.SetPathValue("id", "unknown-id")
 		w := httptest.NewRecorder()
 
-		srv.handleGetJob(w, req)
+		srv.HandleGetJob(w, req)
 
 		if w.Code != http.StatusNotFound {
 			t.Errorf("got status %d, want %d", w.Code, http.StatusNotFound)
@@ -212,7 +214,7 @@ func TestHTTP_ListJobs(t *testing.T) {
 		srv := newTestServer()
 
 		for i := 0; i < 3; i++ {
-			reqBody := EnqueueRequest{
+			reqBody := api.EnqueueRequest{
 				Type:    "echo",
 				Payload: json.RawMessage(`{}`),
 			}
@@ -220,18 +222,18 @@ func TestHTTP_ListJobs(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
-			srv.handleEnqueue(w, req)
+			srv.HandleEnqueue(w, req)
 		}
 
 		listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		listW := httptest.NewRecorder()
-		srv.handleListJobs(listW, listReq)
+		srv.HandleListJobs(listW, listReq)
 
 		if listW.Code != http.StatusOK {
 			t.Errorf("got status %d, want %d", listW.Code, http.StatusOK)
 		}
 
-		var jobList []*jobs.JobInfo
+		var jobList []*tracking.JobInfo
 		if err := json.NewDecoder(listW.Body).Decode(&jobList); err != nil {
 			t.Fatalf("failed to decode job list: %v", err)
 		}
@@ -244,7 +246,7 @@ func TestHTTP_ListJobs(t *testing.T) {
 	t.Run("filters jobs by status", func(t *testing.T) {
 		srv := newTestServer()
 
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: json.RawMessage(`{}`),
 		}
@@ -252,25 +254,25 @@ func TestHTTP_ListJobs(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		listReq := httptest.NewRequest(http.MethodGet, "/jobs?status=pending", nil)
 		listW := httptest.NewRecorder()
-		srv.handleListJobs(listW, listReq)
+		srv.HandleListJobs(listW, listReq)
 
 		if listW.Code != http.StatusOK {
 			t.Errorf("got status %d, want %d", listW.Code, http.StatusOK)
 		}
 
-		var jobList []*jobs.JobInfo
+		var jobList []*tracking.JobInfo
 		json.NewDecoder(listW.Body).Decode(&jobList)
 
 		if len(jobList) != 1 {
 			t.Errorf("got %d pending jobs, want 1", len(jobList))
 		}
 
-		if len(jobList) > 0 && jobList[0].Status != jobs.StatusPending {
-			t.Errorf("got status %q, want %q", jobList[0].Status, jobs.StatusPending)
+		if len(jobList) > 0 && jobList[0].Status != tracking.StatusPending {
+			t.Errorf("got status %q, want %q", jobList[0].Status, tracking.StatusPending)
 		}
 	})
 
@@ -279,13 +281,13 @@ func TestHTTP_ListJobs(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		w := httptest.NewRecorder()
-		srv.handleListJobs(w, req)
+		srv.HandleListJobs(w, req)
 
 		if w.Code != http.StatusOK {
 			t.Errorf("got status %d, want %d", w.Code, http.StatusOK)
 		}
 
-		var jobList []*jobs.JobInfo
+		var jobList []*tracking.JobInfo
 		json.NewDecoder(w.Body).Decode(&jobList)
 
 		if len(jobList) != 0 {
@@ -299,7 +301,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		srv := newTestServer()
 
 		originalPayload := json.RawMessage(`{"message":"hello world","priority":5}`)
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: originalPayload,
 		}
@@ -308,17 +310,17 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		enqReq := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
 		enqReq.Header.Set("Content-Type", "application/json")
 		enqW := httptest.NewRecorder()
-		srv.handleEnqueue(enqW, enqReq)
+		srv.HandleEnqueue(enqW, enqReq)
 
-		var enqResp EnqueueResponse
+		var enqResp api.EnqueueResponse
 		json.NewDecoder(enqW.Body).Decode(&enqResp)
 
 		getReq := httptest.NewRequest(http.MethodGet, "/jobs/"+string(enqResp.JobID), nil)
 		getReq.SetPathValue("id", string(enqResp.JobID))
 		getW := httptest.NewRecorder()
-		srv.handleGetJob(getW, getReq)
+		srv.HandleGetJob(getW, getReq)
 
-		var jobInfo jobs.JobInfo
+		var jobInfo tracking.JobInfo
 		json.NewDecoder(getW.Body).Decode(&jobInfo)
 
 		if jobInfo.Envelope.ID != enqResp.JobID {
@@ -333,7 +335,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 	t.Run("enqueues multiple job types", func(t *testing.T) {
 		srv := newTestServer()
 
-		srv.registry.MustRegister("email", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+		srv.Registry.MustRegister("email", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
 			return nil
 		}))
 
@@ -347,7 +349,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		}
 
 		for _, job := range testJobs {
-			reqBody := EnqueueRequest{
+			reqBody := api.EnqueueRequest{
 				Type:    job.typ,
 				Payload: json.RawMessage(job.payload),
 			}
@@ -357,7 +359,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			srv.handleEnqueue(w, req)
+			srv.HandleEnqueue(w, req)
 
 			if w.Code != http.StatusCreated {
 				t.Fatalf("enqueue failed with status %d", w.Code)
@@ -366,9 +368,9 @@ func TestHTTP_EndToEnd(t *testing.T) {
 
 		listReq := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		listW := httptest.NewRecorder()
-		srv.handleListJobs(listW, listReq)
+		srv.HandleListJobs(listW, listReq)
 
-		var jobList []*jobs.JobInfo
+		var jobList []*tracking.JobInfo
 		json.NewDecoder(listW.Body).Decode(&jobList)
 
 		if len(jobList) != 3 {
@@ -390,7 +392,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 
 		registry.MustRegister("integration", handler)
 
-		srv := newServer(registry, slog.Default())
+		srv := api.NewServer(registry, slog.Default())
 
 		ctx, cancel := context.WithCancel(context.Background())
 		defer cancel()
@@ -400,7 +402,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 		_ = ctx
 
 		for i := 0; i < 3; i++ {
-			reqBody := EnqueueRequest{
+			reqBody := api.EnqueueRequest{
 				Type:    "integration",
 				Payload: json.RawMessage(`{}`),
 			}
@@ -410,7 +412,7 @@ func TestHTTP_EndToEnd(t *testing.T) {
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			srv.handleEnqueue(w, req)
+			srv.HandleEnqueue(w, req)
 
 			if w.Code != http.StatusCreated {
 				t.Fatalf("enqueue failed")
@@ -437,9 +439,9 @@ func TestHTTP_ContextPropagation(t *testing.T) {
 				return nil
 			},
 		}
-		srv.queue = mockQueue
+		srv.Queue = mockQueue
 
-		reqBody := EnqueueRequest{
+		reqBody := api.EnqueueRequest{
 			Type:    "echo",
 			Payload: json.RawMessage(`{}`),
 		}
@@ -449,7 +451,7 @@ func TestHTTP_ContextPropagation(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		w := httptest.NewRecorder()
 
-		srv.handleEnqueue(w, req)
+		srv.HandleEnqueue(w, req)
 
 		if capturedCtx == nil {
 			t.Fatal("context was not passed to queue.Enqueue")
