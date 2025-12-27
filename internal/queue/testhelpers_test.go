@@ -49,29 +49,6 @@ func (l *testLogger) hasAttr(key string, value any) bool {
 	return false
 }
 
-func (l *testLogger) hasError() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for _, r := range l.records {
-		if r.level == slog.LevelError {
-			return true
-		}
-	}
-	return false
-}
-
-func (l *testLogger) errorCount() int {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	count := 0
-	for _, r := range l.records {
-		if r.level == slog.LevelError {
-			count++
-		}
-	}
-	return count
-}
-
 type testLogHandler struct {
 	logger *testLogger
 	attrs  []slog.Attr
