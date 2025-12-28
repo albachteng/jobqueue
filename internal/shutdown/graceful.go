@@ -3,6 +3,7 @@ package shutdown
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 )
@@ -22,6 +23,8 @@ type Manager struct {
 	errors       []error
 	errorsMu     sync.Mutex
 	shutdownFlag bool
+	logger       *slog.Logger
+	runningTasks sync.Map // tracks task name -> bool for incomplete task detection
 }
 
 type namedTask struct {
@@ -33,12 +36,16 @@ const defaultTimeout = 30 * time.Second
 
 // NewManager creates a new shutdown manager with default timeout
 func NewManager(ctx context.Context) *Manager {
-	return NewManagerWithTimeout(ctx, defaultTimeout)
+	return NewManagerWithTimeout(ctx, defaultTimeout, nil)
 }
 
 // NewManagerWithTimeout creates a new shutdown manager with custom timeout
-func NewManagerWithTimeout(ctx context.Context, timeout time.Duration) *Manager {
+func NewManagerWithTimeout(ctx context.Context, timeout time.Duration, logger *slog.Logger) *Manager {
 	shutdownCtx, cancel := context.WithCancel(ctx)
+
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	return &Manager{
 		ctx:          shutdownCtx,
@@ -46,6 +53,7 @@ func NewManagerWithTimeout(ctx context.Context, timeout time.Duration) *Manager 
 		timeout:      timeout,
 		tasks:        make([]namedTask, 0),
 		shutdownDone: make(chan struct{}),
+		logger:       logger,
 	}
 }
 
@@ -104,10 +112,13 @@ func (m *Manager) executeTasks() {
 
 	var wg sync.WaitGroup
 
+	// Track running tasks for timeout reporting
 	for _, nt := range tasks {
+		m.runningTasks.Store(nt.name, true)
 		wg.Add(1)
 		go func(nt namedTask) {
 			defer wg.Done()
+			defer m.runningTasks.Delete(nt.name)
 
 			if err := nt.task(ctx); err != nil {
 				m.recordError(err)
@@ -126,10 +137,19 @@ func (m *Manager) executeTasks() {
 
 	select {
 	case <-done:
-		// All tasks completed
+		// All tasks completed successfully
+		m.logger.Info("shutdown completed", "tasks_completed", len(tasks))
 	case <-timer.C:
-		// Timeout occurred, but tasks are still running
-		// They'll be abandoned when this function returns
+		// Timeout occurred - collect incomplete tasks
+		incomplete := []string{}
+		m.runningTasks.Range(func(key, value interface{}) bool {
+			incomplete = append(incomplete, key.(string))
+			return true
+		})
+		m.logger.Warn("shutdown timeout exceeded",
+			"timeout", m.timeout,
+			"total_tasks", len(tasks),
+			"incomplete_tasks", incomplete)
 	}
 }
 

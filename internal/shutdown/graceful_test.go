@@ -1,14 +1,17 @@
 package shutdown
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 )
 
 func TestShutdownManager_SignalHandling(t *testing.T) {
-	t.Run("handles SIGTERM signal", func(t *testing.T) {
+	t.Run("completes shutdown when triggered", func(t *testing.T) {
 		ctx := context.Background()
 		mgr := NewManager(ctx)
 
@@ -28,7 +31,7 @@ func TestShutdownManager_SignalHandling(t *testing.T) {
 		}
 	})
 
-	t.Run("handles SIGINT signal", func(t *testing.T) {
+	t.Run("handles multiple shutdown calls gracefully (idempotent)", func(t *testing.T) {
 		ctx := context.Background()
 		mgr := NewManager(ctx)
 
@@ -38,26 +41,7 @@ func TestShutdownManager_SignalHandling(t *testing.T) {
 			close(shutdownComplete)
 		}()
 
-		mgr.Shutdown()
-
-		select {
-		case <-shutdownComplete:
-			// Success
-		case <-time.After(100 * time.Millisecond):
-			t.Error("shutdown did not complete in time")
-		}
-	})
-
-	t.Run("handles multiple signals gracefully", func(t *testing.T) {
-		ctx := context.Background()
-		mgr := NewManager(ctx)
-
-		shutdownComplete := make(chan struct{})
-		go func() {
-			mgr.Wait()
-			close(shutdownComplete)
-		}()
-
+		// Multiple calls should be safe (sync.Once ensures single execution)
 		mgr.Shutdown()
 		mgr.Shutdown()
 		mgr.Shutdown()
@@ -116,7 +100,7 @@ func TestShutdownManager_GracefulPeriod(t *testing.T) {
 
 	t.Run("respects shutdown timeout", func(t *testing.T) {
 		ctx := context.Background()
-		mgr := NewManagerWithTimeout(ctx, 100*time.Millisecond)
+		mgr := NewManagerWithTimeout(ctx, 100*time.Millisecond, nil)
 
 		taskCompleted := atomic.Bool{}
 
@@ -144,6 +128,71 @@ func TestShutdownManager_GracefulPeriod(t *testing.T) {
 
 		if taskCompleted.Load() {
 			t.Error("task should have been cancelled by timeout")
+		}
+	})
+}
+
+func TestShutdownManager_TimeoutLogging(t *testing.T) {
+	t.Run("logs incomplete tasks on timeout", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		ctx := context.Background()
+		mgr := NewManagerWithTimeout(ctx, 50*time.Millisecond, logger)
+
+		// Register tasks that won't complete in time
+		mgr.RegisterTask("slow-task-1", func(ctx context.Context) error {
+			time.Sleep(200 * time.Millisecond)
+			return nil
+		})
+
+		mgr.RegisterTask("slow-task-2", func(ctx context.Context) error {
+			time.Sleep(200 * time.Millisecond)
+			return nil
+		})
+
+		go mgr.Shutdown()
+		mgr.Wait()
+
+		logOutput := buf.String()
+
+		// Should log timeout warning
+		if !strings.Contains(logOutput, "shutdown timeout exceeded") {
+			t.Error("expected timeout warning in logs")
+		}
+
+		// Should mention incomplete tasks
+		if !strings.Contains(logOutput, "slow-task-1") || !strings.Contains(logOutput, "slow-task-2") {
+			t.Error("expected incomplete task names in logs")
+		}
+	})
+
+	t.Run("logs successful completion", func(t *testing.T) {
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		ctx := context.Background()
+		mgr := NewManagerWithTimeout(ctx, 200*time.Millisecond, logger)
+
+		// Register tasks that will complete in time
+		mgr.RegisterTask("quick-task", func(ctx context.Context) error {
+			time.Sleep(10 * time.Millisecond)
+			return nil
+		})
+
+		go mgr.Shutdown()
+		mgr.Wait()
+
+		logOutput := buf.String()
+
+		// Should log successful completion
+		if !strings.Contains(logOutput, "shutdown completed") {
+			t.Error("expected completion message in logs")
+		}
+
+		// Should NOT log timeout
+		if strings.Contains(logOutput, "timeout exceeded") {
+			t.Error("should not log timeout when tasks complete")
 		}
 	})
 }
@@ -223,7 +272,7 @@ func TestShutdownManager_ErrorHandling(t *testing.T) {
 func TestShutdownManager_Integration(t *testing.T) {
 	t.Run("realistic shutdown scenario", func(t *testing.T) {
 		ctx := context.Background()
-		mgr := NewManagerWithTimeout(ctx, 2*time.Second)
+		mgr := NewManagerWithTimeout(ctx, 2*time.Second, nil)
 
 		httpServerStopped := atomic.Bool{}
 		dispatcherStopped := atomic.Bool{}
