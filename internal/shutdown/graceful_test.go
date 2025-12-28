@@ -2,9 +2,7 @@ package shutdown
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 )
