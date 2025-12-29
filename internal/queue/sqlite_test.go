@@ -458,3 +458,249 @@ func TestSQLiteQueue_RetryState(t *testing.T) {
 		}
 	})
 }
+
+func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
+	t.Run("dequeues higher priority jobs first", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue jobs with different priorities
+		lowPriority, _ := jobs.NewEnvelope("low", []byte(`{}`))
+		lowPriority.Priority = 1
+
+		mediumPriority, _ := jobs.NewEnvelope("medium", []byte(`{}`))
+		mediumPriority.Priority = 5
+
+		highPriority, _ := jobs.NewEnvelope("high", []byte(`{}`))
+		highPriority.Priority = 10
+
+		// Enqueue in low-to-high order
+		q.Enqueue(ctx, lowPriority)
+		q.Enqueue(ctx, mediumPriority)
+		q.Enqueue(ctx, highPriority)
+
+		// Should dequeue in high-to-low priority order
+		job1, _ := q.Dequeue(ctx)
+		if job1.Priority != 10 {
+			t.Errorf("first job: got priority %d, want 10", job1.Priority)
+		}
+
+		job2, _ := q.Dequeue(ctx)
+		if job2.Priority != 5 {
+			t.Errorf("second job: got priority %d, want 5", job2.Priority)
+		}
+
+		job3, _ := q.Dequeue(ctx)
+		if job3.Priority != 1 {
+			t.Errorf("third job: got priority %d, want 1", job3.Priority)
+		}
+	})
+
+	t.Run("maintains FIFO order within same priority", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue three jobs with same priority
+		job1, _ := jobs.NewEnvelope("first", []byte(`{}`))
+		job1.Priority = 5
+
+		job2, _ := jobs.NewEnvelope("second", []byte(`{}`))
+		job2.Priority = 5
+
+		job3, _ := jobs.NewEnvelope("third", []byte(`{}`))
+		job3.Priority = 5
+
+		q.Enqueue(ctx, job1)
+		q.Enqueue(ctx, job2)
+		q.Enqueue(ctx, job3)
+
+		// Should dequeue in insertion order
+		dequeued1, _ := q.Dequeue(ctx)
+		if dequeued1.Type != "first" {
+			t.Errorf("first dequeued: got type %s, want 'first'", dequeued1.Type)
+		}
+
+		dequeued2, _ := q.Dequeue(ctx)
+		if dequeued2.Type != "second" {
+			t.Errorf("second dequeued: got type %s, want 'second'", dequeued2.Type)
+		}
+
+		dequeued3, _ := q.Dequeue(ctx)
+		if dequeued3.Type != "third" {
+			t.Errorf("third dequeued: got type %s, want 'third'", dequeued3.Type)
+		}
+	})
+
+	t.Run("handles default priority correctly", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue job without setting priority (should default to 0)
+		defaultJob, _ := jobs.NewEnvelope("default", []byte(`{}`))
+		// Don't set priority - should default to 0
+
+		highJob, _ := jobs.NewEnvelope("high", []byte(`{}`))
+		highJob.Priority = 10
+
+		q.Enqueue(ctx, defaultJob)
+		q.Enqueue(ctx, highJob)
+
+		// High priority should come first
+		job1, _ := q.Dequeue(ctx)
+		if job1.Type != "high" {
+			t.Errorf("first job: got type %s, want 'high'", job1.Type)
+		}
+
+		job2, _ := q.Dequeue(ctx)
+		if job2.Type != "default" {
+			t.Errorf("second job: got type %s, want 'default'", job2.Type)
+		}
+	})
+
+	t.Run("handles negative priorities", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		negativeJob, _ := jobs.NewEnvelope("negative", []byte(`{}`))
+		negativeJob.Priority = -5
+
+		defaultJob, _ := jobs.NewEnvelope("default", []byte(`{}`))
+		defaultJob.Priority = 0
+
+		positiveJob, _ := jobs.NewEnvelope("positive", []byte(`{}`))
+		positiveJob.Priority = 5
+
+		q.Enqueue(ctx, negativeJob)
+		q.Enqueue(ctx, defaultJob)
+		q.Enqueue(ctx, positiveJob)
+
+		// Should dequeue: positive, default, negative
+		job1, _ := q.Dequeue(ctx)
+		if job1.Type != "positive" {
+			t.Errorf("first job: got type %s, want 'positive'", job1.Type)
+		}
+
+		job2, _ := q.Dequeue(ctx)
+		if job2.Type != "default" {
+			t.Errorf("second job: got type %s, want 'default'", job2.Type)
+		}
+
+		job3, _ := q.Dequeue(ctx)
+		if job3.Type != "negative" {
+			t.Errorf("third job: got type %s, want 'negative'", job3.Type)
+		}
+	})
+
+	t.Run("persists priority across restarts", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+
+		q1, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+
+		ctx := context.Background()
+
+		lowJob, _ := jobs.NewEnvelope("low", []byte(`{}`))
+		lowJob.Priority = 1
+
+		highJob, _ := jobs.NewEnvelope("high", []byte(`{}`))
+		highJob.Priority = 10
+
+		q1.Enqueue(ctx, lowJob)
+		q1.Enqueue(ctx, highJob)
+		q1.Close()
+
+		// Reopen database
+		q2, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to reopen queue: %v", err)
+		}
+		defer q2.Close()
+
+		// High priority should still come first after restart
+		job1, _ := q2.Dequeue(ctx)
+		if job1.Priority != 10 {
+			t.Errorf("first job after restart: got priority %d, want 10", job1.Priority)
+		}
+		if job1.Type != "high" {
+			t.Errorf("first job after restart: got type %s, want 'high'", job1.Type)
+		}
+
+		job2, _ := q2.Dequeue(ctx)
+		if job2.Priority != 1 {
+			t.Errorf("second job after restart: got priority %d, want 1", job2.Priority)
+		}
+	})
+
+	t.Run("complex priority scenario", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Create a mix of priorities enqueued in random order
+		testJobs := []struct {
+			typ      jobs.JobType
+			priority int
+		}{
+			{"job1", 5},
+			{"job2", 10},
+			{"job3", 1},
+			{"job4", 10}, // Same priority as job2
+			{"job5", 0},
+			{"job6", 5}, // Same priority as job1
+		}
+
+		for _, j := range testJobs {
+			env, _ := jobs.NewEnvelope(j.typ, []byte(`{}`))
+			env.Priority = j.priority
+			q.Enqueue(ctx, env)
+		}
+
+		// Expected dequeue order (higher priority first):
+		// job2 (10), job4 (10) - FIFO within priority 10
+		// job1 (5), job6 (5) - FIFO within priority 5
+		// job3 (1)
+		// job5 (0)
+		expectedOrder := []jobs.JobType{"job2", "job4", "job1", "job6", "job3", "job5"}
+
+		for i, expectedType := range expectedOrder {
+			job, err := q.Dequeue(ctx)
+			if err != nil {
+				t.Fatalf("dequeue %d failed: %v", i, err)
+			}
+			if job.Type != expectedType {
+				t.Errorf("position %d: got type %s, want %s", i, job.Type, expectedType)
+			}
+		}
+	})
+}

@@ -7,8 +7,9 @@ import (
 )
 
 type EnqueueRequest struct {
-	Type    jobs.JobType    `json:"type"`
-	Payload json.RawMessage `json:"payload"`
+	Type     jobs.JobType    `json:"type"`
+	Payload  json.RawMessage `json:"payload"`
+	Priority int             `json:"priority,omitempty"`
 }
 
 type EnqueueResponse struct {
