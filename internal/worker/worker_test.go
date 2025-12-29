@@ -239,12 +239,10 @@ func TestWorker_RespectsContext(t *testing.T) {
 		count++
 		mu.Unlock()
 
-		// Signal when first job is being processed
 		firstJobOnce.Do(func() {
 			close(firstJobProcessed)
 		})
 
-		// Simulate work by blocking on context
 		<-ctx.Done()
 		return nil
 	})
@@ -274,9 +272,7 @@ func TestWorker_RespectsContext(t *testing.T) {
 		}
 	}
 
-	// Wait for first job to start processing
 	<-firstJobProcessed
-	// Then cancel context
 	cancel()
 
 	select {
