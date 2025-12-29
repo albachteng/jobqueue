@@ -57,6 +57,7 @@ func (q *SQLiteQueue) initSchema() error {
 		type TEXT NOT NULL,
 		payload BLOB NOT NULL,
 		status TEXT NOT NULL DEFAULT 'pending',
+		priority INTEGER NOT NULL DEFAULT 0,
 		attempts INTEGER NOT NULL DEFAULT 0,
 		max_retries INTEGER NOT NULL DEFAULT 3,
 		last_error TEXT,
@@ -65,8 +66,8 @@ func (q *SQLiteQueue) initSchema() error {
 		processed_at TIMESTAMP
 	);
 
-	CREATE INDEX IF NOT EXISTS idx_status_created
-		ON jobs(status, created_at);
+	CREATE INDEX IF NOT EXISTS idx_status_priority_created
+		ON jobs(status, priority DESC, created_at ASC);
 	`
 
 	_, err := q.db.Exec(schema)
@@ -87,14 +88,15 @@ func (q *SQLiteQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
 	}
 
 	query := `
-		INSERT INTO jobs (id, type, payload, status, attempts, max_retries, created_at, updated_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)
+		INSERT INTO jobs (id, type, payload, status, priority, attempts, max_retries, created_at, updated_at)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
 	`
 
 	_, err := q.db.ExecContext(ctx, query,
 		env.ID,
 		env.Type,
 		env.Payload,
+		env.Priority,
 		env.Attempts,
 		env.MaxRetries,
 		env.CreatedAt,
@@ -122,12 +124,12 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		_ = tx.Rollback() //nolint:errcheck
 	}()
 
-	// Find oldest pending job
+	// Find highest priority pending job (FIFO within same priority)
 	query := `
-		SELECT id, type, payload, attempts, max_retries, created_at
+		SELECT id, type, payload, priority, attempts, max_retries, created_at
 		FROM jobs
 		WHERE status = 'pending'
-		ORDER BY created_at ASC
+		ORDER BY priority DESC, created_at ASC
 		LIMIT 1
 	`
 
@@ -137,6 +139,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		&env.ID,
 		&env.Type,
 		&payload,
+		&env.Priority,
 		&env.Attempts,
 		&env.MaxRetries,
 		&env.CreatedAt,
@@ -193,17 +196,17 @@ func (q *SQLiteQueue) FailJob(ctx context.Context, jobID jobs.JobID, errorMsg st
 func (q *SQLiteQueue) RequeueJob(ctx context.Context, env *jobs.Envelope) error {
 	query := `
 		UPDATE jobs
-		SET status = 'pending', attempts = ?, updated_at = ?
+		SET status = 'pending', attempts = ?, priority = ?, updated_at = ?
 		WHERE id = ?
 	`
-	_, err := q.db.ExecContext(ctx, query, env.Attempts, time.Now(), env.ID)
+	_, err := q.db.ExecContext(ctx, query, env.Attempts, env.Priority, time.Now(), env.ID)
 	return err
 }
 
 // GetJob retrieves a job by ID
 func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord, bool) {
 	query := `
-		SELECT id, type, payload, status, attempts, max_retries, last_error, created_at, processed_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at
 		FROM jobs
 		WHERE id = ?
 	`
@@ -219,6 +222,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 		&record.Type,
 		&payload,
 		&record.Status,
+		&record.Priority,
 		&record.Attempts,
 		&record.MaxRetries,
 		&lastError,
@@ -247,10 +251,10 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 // ListJobsByStatus returns all jobs with a given status
 func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*JobRecord {
 	query := `
-		SELECT id, type, payload, status, attempts, max_retries, last_error, created_at, processed_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at
 		FROM jobs
 		WHERE status = ?
-		ORDER BY created_at DESC
+		ORDER BY priority DESC, created_at DESC
 	`
 
 	rows, err := q.db.QueryContext(ctx, query, status)
@@ -276,6 +280,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 			&record.Type,
 			&payload,
 			&record.Status,
+			&record.Priority,
 			&record.Attempts,
 			&record.MaxRetries,
 			&lastError,

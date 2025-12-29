@@ -27,6 +27,8 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	envelope.Priority = req.Priority
+
 	s.Tracker.Register(envelope)
 
 	if err := s.Queue.Enqueue(r.Context(), envelope); err != nil {
@@ -36,7 +38,8 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 	s.Logger.Info("job enqueued",
 		"job_id", envelope.ID,
-		"job_type", envelope.Type)
+		"job_type", envelope.Type,
+		"priority", envelope.Priority)
 
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(EnqueueResponse{
