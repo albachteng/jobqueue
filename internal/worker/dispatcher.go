@@ -39,7 +39,6 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	d.logger.Info("dispatcher starting", "num_workers", d.numWorkers)
 	d.jobChan = make(chan *jobs.Envelope, d.numWorkers)
 
-	// Check if queue is persistent
 	persQueue, isPersistent := d.queue.(queue.PersistentQueue)
 
 	for i := 0; i < d.numWorkers; i++ {

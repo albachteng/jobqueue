@@ -64,7 +64,6 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 	for {
 		envelope.Attempts++
 
-		// Mark as processing
 		if w.persQueue != nil {
 			// Persistence mode - status is already "processing" from dequeue
 		} else if w.tracker != nil {
@@ -74,7 +73,6 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 		err := w.registry.Handle(ctx, envelope)
 
 		if err == nil {
-			// Job completed successfully
 			if w.persQueue != nil {
 				if completeErr := w.persQueue.CompleteJob(ctx, envelope.ID); completeErr != nil {
 					w.logger.Error("failed to mark job as completed in database",
@@ -95,7 +93,6 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 		shouldRetry := envelope.Attempts <= envelope.MaxRetries
 
 		if !shouldRetry {
-			// Job failed permanently
 			if w.persQueue != nil {
 				if failErr := w.persQueue.FailJob(ctx, envelope.ID, err.Error()); failErr != nil {
 					w.logger.Error("failed to mark job as failed in database",
@@ -123,7 +120,6 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 			"attempts", envelope.Attempts,
 			"max_retries", envelope.MaxRetries)
 
-		// Requeue for retry with updated attempt count
 		if w.persQueue != nil {
 			backoffDelay := w.backoffFn(envelope.Attempts - 1)
 			time.Sleep(backoffDelay)
