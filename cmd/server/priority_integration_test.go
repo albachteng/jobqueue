@@ -16,7 +16,6 @@ import (
 )
 
 func TestPriorityQueuing_HTTPtoDB(t *testing.T) {
-	// Create a temporary database
 	tmpDB := t.TempDir() + "/test.db"
 
 	persQueue, err := queue.NewSQLiteQueue(tmpDB)
@@ -28,22 +27,18 @@ func TestPriorityQueuing_HTTPtoDB(t *testing.T) {
 	registry := jobs.NewRegistry()
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelError}))
 
-	// Register a handler (won't be called in this test)
 	registry.MustRegister("test", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
 		return nil
 	}))
 
-	// Create API server
 	srv := api.NewServer(registry, logger)
 	srv.Queue = persQueue
 
-	// Create HTTP test server
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /jobs", srv.HandleEnqueue)
 	testServer := httptest.NewServer(mux)
 	defer testServer.Close()
 
-	// Test jobs with various priorities
 	testJobs := []struct {
 		name     string
 		priority int
@@ -56,16 +51,13 @@ func TestPriorityQueuing_HTTPtoDB(t *testing.T) {
 		{"job6", 100}, // High priority
 	}
 
-	// Track job IDs
 	jobIDs := make(map[string]jobs.JobID)
 
-	// Enqueue all jobs via HTTP API
 	for _, tj := range testJobs {
 		reqBody := map[string]any{
 			"type":    "test",
 			"payload": tj.name,
 		}
-		// Only include priority if non-zero
 		if tj.priority != 0 {
 			reqBody["priority"] = tj.priority
 		}
@@ -91,6 +83,7 @@ func TestPriorityQueuing_HTTPtoDB(t *testing.T) {
 	}
 
 	// Verify jobs are in database with correct priorities
+	// Note that we are not guaranteeing order, only that the priorities are respected
 	ctx := context.Background()
 	for _, tj := range testJobs {
 		jobID := jobIDs[tj.name]
