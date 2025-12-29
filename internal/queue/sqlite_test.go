@@ -470,7 +470,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Enqueue jobs with different priorities
 		lowPriority, _ := jobs.NewEnvelope("low", []byte(`{}`))
 		lowPriority.Priority = 1
 
@@ -480,12 +479,10 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 		highPriority, _ := jobs.NewEnvelope("high", []byte(`{}`))
 		highPriority.Priority = 10
 
-		// Enqueue in low-to-high order
 		q.Enqueue(ctx, lowPriority)
 		q.Enqueue(ctx, mediumPriority)
 		q.Enqueue(ctx, highPriority)
 
-		// Should dequeue in high-to-low priority order
 		job1, _ := q.Dequeue(ctx)
 		if job1.Priority != 10 {
 			t.Errorf("first job: got priority %d, want 10", job1.Priority)
@@ -512,7 +509,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Enqueue three jobs with same priority
 		job1, _ := jobs.NewEnvelope("first", []byte(`{}`))
 		job1.Priority = 5
 
@@ -526,7 +522,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 		q.Enqueue(ctx, job2)
 		q.Enqueue(ctx, job3)
 
-		// Should dequeue in insertion order
 		dequeued1, _ := q.Dequeue(ctx)
 		if dequeued1.Type != "first" {
 			t.Errorf("first dequeued: got type %s, want 'first'", dequeued1.Type)
@@ -553,7 +548,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Enqueue job without setting priority (should default to 0)
 		defaultJob, _ := jobs.NewEnvelope("default", []byte(`{}`))
 		// Don't set priority - should default to 0
 
@@ -563,7 +557,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 		q.Enqueue(ctx, defaultJob)
 		q.Enqueue(ctx, highJob)
 
-		// High priority should come first
 		job1, _ := q.Dequeue(ctx)
 		if job1.Type != "high" {
 			t.Errorf("first job: got type %s, want 'high'", job1.Type)
@@ -598,7 +591,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 		q.Enqueue(ctx, defaultJob)
 		q.Enqueue(ctx, positiveJob)
 
-		// Should dequeue: positive, default, negative
 		job1, _ := q.Dequeue(ctx)
 		if job1.Type != "positive" {
 			t.Errorf("first job: got type %s, want 'positive'", job1.Type)
@@ -635,14 +627,12 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 		q1.Enqueue(ctx, highJob)
 		q1.Close()
 
-		// Reopen database
 		q2, err := NewSQLiteQueue(dbPath)
 		if err != nil {
 			t.Fatalf("failed to reopen queue: %v", err)
 		}
 		defer q2.Close()
 
-		// High priority should still come first after restart
 		job1, _ := q2.Dequeue(ctx)
 		if job1.Priority != 10 {
 			t.Errorf("first job after restart: got priority %d, want 10", job1.Priority)
@@ -667,7 +657,6 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create a mix of priorities enqueued in random order
 		testJobs := []struct {
 			typ      jobs.JobType
 			priority int
