@@ -38,7 +38,6 @@ func TestSQLiteQueue_Enqueue(t *testing.T) {
 		q.Enqueue(ctx, env)
 		q.Close()
 
-		// Reopen database and verify job exists
 		q2, err := NewSQLiteQueue(dbPath)
 		if err != nil {
 			t.Fatalf("failed to reopen queue: %v", err)
@@ -172,7 +171,6 @@ func TestSQLiteQueue_Concurrency(t *testing.T) {
 		ctx := context.Background()
 		done := make(chan struct{})
 
-		// Enqueue 100 jobs concurrently
 		for i := 0; i < 100; i++ {
 			go func() {
 				env, _ := jobs.NewEnvelope("concurrent", []byte(`{}`))
@@ -181,12 +179,10 @@ func TestSQLiteQueue_Concurrency(t *testing.T) {
 			}()
 		}
 
-		// Wait for all enqueues
 		for i := 0; i < 100; i++ {
 			<-done
 		}
 
-		// Verify we can dequeue 100 jobs
 		count := 0
 		for {
 			_, err := q.Dequeue(ctx)
@@ -217,13 +213,11 @@ func TestSQLiteQueue_JobState(t *testing.T) {
 
 		job, _ := q.Dequeue(ctx)
 
-		// Job should not be dequeued again
 		_, err = q.Dequeue(ctx)
 		if err != ErrEmptyQueue {
 			t.Errorf("dequeued job should not be available again, got job instead of ErrEmptyQueue")
 		}
 
-		// Verify we can access the job through GetJob
 		retrieved, exists := q.GetJob(ctx, job.ID)
 		if !exists {
 			t.Error("job should still exist in database")
@@ -250,7 +244,6 @@ func TestSQLiteQueue_JobState(t *testing.T) {
 			t.Errorf("CompleteJob failed: %v", err)
 		}
 
-		// Job should be marked completed but still queryable
 		retrieved, exists := q.GetJob(ctx, job.ID)
 		if !exists {
 			t.Error("completed job should still exist in database")
@@ -295,7 +288,6 @@ func TestSQLiteQueue_JobRecovery(t *testing.T) {
 	t.Run("recovers pending jobs on startup", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "test.db")
 
-		// First instance: enqueue jobs
 		q1, err := NewSQLiteQueue(dbPath)
 		if err != nil {
 			t.Fatalf("failed to create queue: %v", err)
@@ -332,7 +324,6 @@ func TestSQLiteQueue_JobRecovery(t *testing.T) {
 	t.Run("resets stuck processing jobs to pending", func(t *testing.T) {
 		dbPath := filepath.Join(t.TempDir(), "test.db")
 
-		// First instance: dequeue job but don't complete
 		q1, err := NewSQLiteQueue(dbPath)
 		if err != nil {
 			t.Fatalf("failed to create queue: %v", err)
@@ -351,7 +342,6 @@ func TestSQLiteQueue_JobRecovery(t *testing.T) {
 		}
 		defer q2.Close()
 
-		// Should be able to dequeue the "stuck" job again
 		job, err := q2.Dequeue(ctx)
 		if err != nil {
 			t.Fatalf("failed to dequeue recovered job: %v", err)
@@ -374,7 +364,6 @@ func TestSQLiteQueue_Cleanup(t *testing.T) {
 			t.Errorf("Close failed: %v", err)
 		}
 
-		// Verify database file exists
 		if _, err := os.Stat(dbPath); os.IsNotExist(err) {
 			t.Error("database file should exist after close")
 		}
@@ -392,7 +381,6 @@ func TestSQLiteQueue_ListJobs(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create jobs with different statuses
 		pending1, _ := jobs.NewEnvelope("pending1", []byte(`{}`))
 		pending2, _ := jobs.NewEnvelope("pending2", []byte(`{}`))
 		q.Enqueue(ctx, pending1)
@@ -407,19 +395,16 @@ func TestSQLiteQueue_ListJobs(t *testing.T) {
 		job, _ := q.Dequeue(ctx)
 		q.CompleteJob(ctx, job.ID)
 
-		// List pending jobs
 		pendingJobs := q.ListJobsByStatus(ctx, "pending")
 		if len(pendingJobs) != 2 {
 			t.Errorf("got %d pending jobs, want 2", len(pendingJobs))
 		}
 
-		// List processing jobs
 		processingJobs := q.ListJobsByStatus(ctx, "processing")
 		if len(processingJobs) != 1 {
 			t.Errorf("got %d processing jobs, want 1", len(processingJobs))
 		}
 
-		// List completed jobs
 		completedJobs := q.ListJobsByStatus(ctx, "completed")
 		if len(completedJobs) != 1 {
 			t.Errorf("got %d completed jobs, want 1", len(completedJobs))
@@ -445,7 +430,6 @@ func TestSQLiteQueue_RetryState(t *testing.T) {
 			t.Errorf("initial attempts: got %d, want 0", job.Attempts)
 		}
 
-		// Increment and re-enqueue for retry
 		job.Attempts++
 		q.RequeueJob(ctx, job)
 

@@ -39,7 +39,6 @@ func NewSQLiteQueue(dbPath string) (*SQLiteQueue, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	// Recover stuck jobs on startup
 	if err := q.recoverStuckJobs(); err != nil {
 		if closeErr := db.Close(); closeErr != nil {
 			return nil, fmt.Errorf("failed to recover stuck jobs: %w (close error: %v)", err, closeErr)
@@ -120,7 +119,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 	defer func() {
 		// Rollback is safe to call even if transaction was committed (returns sql.ErrTxDone)
 		// In a defer, we cannot meaningfully handle or return errors
-		_ = tx.Rollback() //nolint:errcheck // defer cleanup - error cannot be returned
+		_ = tx.Rollback() //nolint:errcheck
 	}()
 
 	// Find oldest pending job
@@ -150,11 +149,9 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		return nil, err
 	}
 
-	// Copy payload
 	env.Payload = make([]byte, len(payload))
 	copy(env.Payload, payload)
 
-	// Mark as processing
 	updateQuery := `UPDATE jobs SET status = 'processing', updated_at = ? WHERE id = ?`
 	_, err = tx.ExecContext(ctx, updateQuery, time.Now(), env.ID)
 	if err != nil {
@@ -263,7 +260,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 	defer func() {
 		// Close is idempotent and safe to call multiple times
 		// Iteration errors are available via rows.Err() after the loop
-		_ = rows.Close() //nolint:errcheck // defer cleanup - error cannot be returned
+		_ = rows.Close() //nolint:errcheck
 	}()
 
 	var records []*JobRecord

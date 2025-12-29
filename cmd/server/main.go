@@ -28,13 +28,11 @@ func main() {
 		return nil
 	}))
 
-	// Create persistent queue with SQLite
 	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
 		dbPath = "data/jobqueue.db"
 	}
 
-	// Ensure data directory exists
 	if err := os.MkdirAll("data", 0755); err != nil {
 		logger.Error("failed to create data directory", "error", err)
 		os.Exit(1)
@@ -47,7 +45,7 @@ func main() {
 	}
 
 	srv := api.NewServer(registry, logger)
-	srv.Queue = persQueue // Use persistent queue
+	srv.Queue = persQueue
 
 	dispatcher := worker.NewDispatcher(persQueue, 5, registry, srv.Tracker, logger)
 	ctx, cancel := context.WithCancel(context.Background())
