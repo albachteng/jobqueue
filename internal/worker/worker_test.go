@@ -543,12 +543,10 @@ func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 	jobChan := make(chan *jobs.Envelope, 1)
 	registry := jobs.NewRegistry()
 
-	// Track MoveToDLQ calls
 	var dlqJobID jobs.JobID
 	var dlqError string
 	var mu sync.Mutex
 
-	// Create mock persistent queue
 	mockQueue := &mockPersistentQueue{
 		moveToDLQFunc: func(ctx context.Context, jobID jobs.JobID, errorMsg string) error {
 			mu.Lock()
@@ -588,7 +586,6 @@ func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 
 	wg.Wait()
 
-	// Verify job was moved to DLQ
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -604,7 +601,6 @@ func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 		t.Errorf("expected DLQ error to contain 'permanent failure', got %q", dlqError)
 	}
 
-	// Should have attempted MaxRetries + 1 times
 	if failCount != 4 {
 		t.Errorf("expected 4 attempts, got %d", failCount)
 	}
@@ -661,12 +657,10 @@ func TestWorker_DLQPreservesErrorContext(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
-	// Error should include the original error message
 	if !strings.Contains(capturedError, "database connection failed") {
 		t.Errorf("expected error to contain original message, got %q", capturedError)
 	}
 
-	// Should have made all retry attempts
 	if capturedAttempts != 3 {
 		t.Errorf("expected 3 attempts, got %d", capturedAttempts)
 	}
