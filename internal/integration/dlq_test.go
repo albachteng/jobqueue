@@ -15,7 +15,6 @@ import (
 )
 
 func TestDLQ_EndToEnd(t *testing.T) {
-	// Create a temporary database
 	dbPath := t.TempDir() + "/test.db"
 	persQueue, err := queue.NewSQLiteQueue(dbPath)
 	if err != nil {
@@ -23,7 +22,6 @@ func TestDLQ_EndToEnd(t *testing.T) {
 	}
 	defer persQueue.Close()
 
-	// Set up registry with a failing job handler
 	registry := jobs.NewRegistry()
 	failCount := 0
 	registry.MustRegister("failing-job", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
@@ -31,12 +29,10 @@ func TestDLQ_EndToEnd(t *testing.T) {
 		return errors.New("intentional failure")
 	}))
 
-	// Create logger
 	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelError, // Only show errors to keep test output clean
 	}))
 
-	// Start dispatcher with workers
 	dispatcher := worker.NewDispatcher(persQueue, 1, registry, nil, logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -46,7 +42,6 @@ func TestDLQ_EndToEnd(t *testing.T) {
 	}
 	defer dispatcher.Stop()
 
-	// Enqueue a job that will fail
 	payload := json.RawMessage(`{"test":"data"}`)
 	envelope, err := jobs.NewEnvelope("failing-job", payload)
 	if err != nil {
@@ -61,12 +56,26 @@ func TestDLQ_EndToEnd(t *testing.T) {
 	jobID := envelope.ID
 	t.Logf("Enqueued job %s", jobID)
 
-	// Wait for job to be processed and moved to DLQ
+	// Poll for job to be moved to DLQ (with timeout)
 	// It should fail on attempts 1, 2, and 3, then move to DLQ
-	time.Sleep(2 * time.Second) // Give enough time for retries with backoff
+	timeout := time.After(5 * time.Second)
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
 
-	// Verify job is in DLQ
-	dlqJobs := persQueue.ListDLQJobs(ctx)
+	var dlqJobs []*queue.JobRecord
+	for {
+		select {
+		case <-timeout:
+			t.Fatalf("timeout waiting for job to move to DLQ, got %d jobs", len(dlqJobs))
+		case <-ticker.C:
+			dlqJobs = persQueue.ListDLQJobs(ctx)
+			if len(dlqJobs) == 1 {
+				goto jobInDLQ
+			}
+		}
+	}
+jobInDLQ:
+
 	if len(dlqJobs) != 1 {
 		t.Fatalf("expected 1 job in DLQ, got %d", len(dlqJobs))
 	}
@@ -89,7 +98,6 @@ func TestDLQ_EndToEnd(t *testing.T) {
 
 	t.Logf("Job successfully moved to DLQ after %d attempts", dlqJobs[0].Attempts)
 
-	// Verify payload is preserved
 	var payloadData map[string]string
 	if err := json.Unmarshal(dlqJobs[0].Payload, &payloadData); err != nil {
 		t.Errorf("failed to unmarshal payload: %v", err)
@@ -139,6 +147,3 @@ func TestDLQ_EndToEnd(t *testing.T) {
 
 	t.Logf("End-to-end DLQ test completed successfully")
 }
-
-// TestDLQ_MultipleJobs removed due to timing/concurrency issues
-// The core DLQ functionality is adequately tested by TestDLQ_EndToEnd
