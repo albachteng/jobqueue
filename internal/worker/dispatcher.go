@@ -39,11 +39,18 @@ func (d *Dispatcher) Start(ctx context.Context) error {
 	d.logger.Info("dispatcher starting", "num_workers", d.numWorkers)
 	d.jobChan = make(chan *jobs.Envelope, d.numWorkers)
 
+	persQueue, isPersistent := d.queue.(queue.PersistentQueue)
+
 	for i := 0; i < d.numWorkers; i++ {
 		d.wg.Add(1)
 		go func(workerID int) {
 			defer d.wg.Done()
-			worker := NewWorker(d.registry, d.tracker, d.logger.With("worker_id", workerID))
+			var worker *Worker
+			if isPersistent {
+				worker = NewWorkerWithPersistence(d.registry, persQueue, d.logger.With("worker_id", workerID))
+			} else {
+				worker = NewWorker(d.registry, d.tracker, d.logger.With("worker_id", workerID))
+			}
 			worker.Start(ctx, d.jobChan)
 		}(i)
 	}
