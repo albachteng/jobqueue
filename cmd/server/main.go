@@ -4,10 +4,14 @@ import (
 	"context"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/albachteng/jobqueue/internal/api"
 	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/logging"
+	"github.com/albachteng/jobqueue/internal/shutdown"
 	"github.com/albachteng/jobqueue/internal/worker"
 )
 
@@ -33,7 +37,6 @@ func main() {
 		logger.Error("failed to start dispatcher", "error", err)
 		os.Exit(1)
 	}
-	defer dispatcher.Stop()
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -47,10 +50,55 @@ func main() {
 	mux.HandleFunc("GET /jobs/{id}", srv.HandleGetJob)
 	mux.HandleFunc("GET /jobs", srv.HandleListJobs)
 
-	addr := ":" + port
-	logger.Info("server starting", "address", addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
-		logger.Error("server failed", "error", err)
+	httpServer := &http.Server{
+		Addr:    ":" + port,
+		Handler: mux,
+	}
+
+	shutdownManager := shutdown.NewManagerWithTimeout(context.Background(), 30*time.Second, logger)
+
+	if err := shutdownManager.RegisterTask("http-server", func(ctx context.Context) error {
+		logger.Info("shutting down HTTP server")
+		return httpServer.Shutdown(ctx)
+	}); err != nil {
+		logger.Error("failed to register http-server shutdown task", "error", err)
 		os.Exit(1)
 	}
+
+	if err := shutdownManager.RegisterTask("dispatcher", func(ctx context.Context) error {
+		logger.Info("shutting down dispatcher")
+		cancel() // Cancel dispatcher context
+		dispatcher.Stop()
+		return nil
+	}); err != nil {
+		logger.Error("failed to register dispatcher shutdown task", "error", err)
+		os.Exit(1)
+	}
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
+
+	go func() {
+		logger.Info("server starting", "address", httpServer.Addr)
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			logger.Error("server failed", "error", err)
+			os.Exit(1)
+		}
+	}()
+
+	<-sigChan
+	logger.Info("shutdown signal received")
+
+	shutdownManager.Shutdown()
+	shutdownManager.Wait()
+
+	if errors := shutdownManager.Errors(); len(errors) > 0 {
+		logger.Error("shutdown completed with errors", "error_count", len(errors))
+		for _, err := range errors {
+			logger.Error("shutdown error", "error", err)
+		}
+		os.Exit(1)
+	}
+
+	logger.Info("shutdown complete")
 }
