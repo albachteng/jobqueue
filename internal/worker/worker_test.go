@@ -540,27 +540,39 @@ func TestWorker_LogsErrors(t *testing.T) {
 
 func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 	ctx := context.Background()
-	jobChan := make(chan *jobs.Envelope, 1)
+	jobChan := make(chan *jobs.Envelope, 10) // Buffer for requeued jobs
 	registry := jobs.NewRegistry()
 
 	var dlqJobID jobs.JobID
 	var dlqError string
+	var failCount int
 	var mu sync.Mutex
+	dlqCalled := make(chan struct{})
 
 	mockQueue := &mockPersistentQueue{
-		moveToDLQFunc: func(ctx context.Context, jobID jobs.JobID, errorMsg string) error {
+		requeueJobFunc: func(ctx context.Context, env *jobs.Envelope) error {
+			// In persistence mode, requeue puts job back in channel for retry
+			// Simulate by feeding it back
+			go func() {
+				jobChan <- env
+			}()
+			return nil
+		},
+		moveToDLQFunc: func(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
 			mu.Lock()
-			dlqJobID = jobID
+			dlqJobID = env.ID
 			dlqError = errorMsg
 			mu.Unlock()
+			close(dlqCalled)
 			return nil
 		},
 	}
 
 	// Handler that always fails
-	failCount := 0
 	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+		mu.Lock()
 		failCount++
+		mu.Unlock()
 		return errors.New("permanent failure")
 	})
 
@@ -582,6 +594,9 @@ func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 		MaxRetries: 3,
 	}
 	jobChan <- envelope
+
+	// Wait for DLQ to be called
+	<-dlqCalled
 	close(jobChan)
 
 	wg.Wait()
@@ -608,18 +623,26 @@ func TestWorker_MovesToDLQAfterMaxRetries(t *testing.T) {
 
 func TestWorker_DLQPreservesErrorContext(t *testing.T) {
 	ctx := context.Background()
-	jobChan := make(chan *jobs.Envelope, 1)
+	jobChan := make(chan *jobs.Envelope, 10)
 	registry := jobs.NewRegistry()
 
 	var capturedError string
 	var capturedAttempts int
 	var mu sync.Mutex
+	dlqCalled := make(chan struct{})
 
 	mockQueue := &mockPersistentQueue{
-		moveToDLQFunc: func(ctx context.Context, jobID jobs.JobID, errorMsg string) error {
+		requeueJobFunc: func(ctx context.Context, env *jobs.Envelope) error {
+			go func() {
+				jobChan <- env
+			}()
+			return nil
+		},
+		moveToDLQFunc: func(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
 			mu.Lock()
 			capturedError = errorMsg
 			mu.Unlock()
+			close(dlqCalled)
 			return nil
 		},
 	}
@@ -650,6 +673,9 @@ func TestWorker_DLQPreservesErrorContext(t *testing.T) {
 		MaxRetries: 2,
 	}
 	jobChan <- envelope
+
+	// Wait for DLQ to be called
+	<-dlqCalled
 	close(jobChan)
 
 	wg.Wait()
@@ -671,7 +697,7 @@ type mockPersistentQueue struct {
 	completeJobFunc func(ctx context.Context, jobID jobs.JobID) error
 	failJobFunc     func(ctx context.Context, jobID jobs.JobID, errorMsg string) error
 	requeueJobFunc  func(ctx context.Context, env *jobs.Envelope) error
-	moveToDLQFunc   func(ctx context.Context, jobID jobs.JobID, errorMsg string) error
+	moveToDLQFunc   func(ctx context.Context, env *jobs.Envelope, errorMsg string) error
 }
 
 func (m *mockPersistentQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
@@ -703,9 +729,9 @@ func (m *mockPersistentQueue) RequeueJob(ctx context.Context, env *jobs.Envelope
 	return nil
 }
 
-func (m *mockPersistentQueue) MoveToDLQ(ctx context.Context, jobID jobs.JobID, errorMsg string) error {
+func (m *mockPersistentQueue) MoveToDLQ(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
 	if m.moveToDLQFunc != nil {
-		return m.moveToDLQFunc(ctx, jobID, errorMsg)
+		return m.moveToDLQFunc(ctx, env, errorMsg)
 	}
 	return nil
 }

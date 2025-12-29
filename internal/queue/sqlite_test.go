@@ -2,6 +2,7 @@ package queue
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -711,9 +712,10 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		job, _ := q.Dequeue(ctx)
 		job.Attempts = 4 // Exceeded max retries
+
 		errorMsg := "permanent failure after 4 attempts"
 
-		err = q.MoveToDLQ(ctx, job.ID, errorMsg)
+		err = q.MoveToDLQ(ctx, job, errorMsg)
 		if err != nil {
 			t.Fatalf("MoveToDLQ failed: %v", err)
 		}
@@ -751,7 +753,7 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 			env, _ := jobs.NewEnvelope(jobs.JobType("dlq-test"), []byte(`{}`))
 			q.Enqueue(ctx, env)
 			job, _ := q.Dequeue(ctx)
-			q.MoveToDLQ(ctx, job.ID, "test error")
+			q.MoveToDLQ(ctx, job, "test error")
 			jobIDs[i] = job.ID
 		}
 
@@ -787,7 +789,7 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		job, _ := q.Dequeue(ctx)
 		job.Attempts = 4
-		q.MoveToDLQ(ctx, job.ID, "original error")
+		q.MoveToDLQ(ctx, job, "original error")
 
 		err = q.RequeueDLQJob(ctx, job.ID)
 		if err != nil {
@@ -827,7 +829,7 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		payload := []byte(`{"message":"test data"}`)
+		payload := json.RawMessage(`{"message":"test data"}`)
 		env, _ := jobs.NewEnvelope("preserve-test", payload)
 		env.Priority = 10
 		env.MaxRetries = 5
@@ -836,7 +838,7 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 		job, _ := q.Dequeue(ctx)
 		job.Attempts = 6
 
-		q.MoveToDLQ(ctx, job.ID, "max retries exceeded")
+		q.MoveToDLQ(ctx, job, "max retries exceeded")
 
 		record, exists := q.GetJob(ctx, job.ID)
 		if !exists {

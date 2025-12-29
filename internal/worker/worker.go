@@ -94,22 +94,36 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 
 		if !shouldRetry {
 			if w.persQueue != nil {
-				if failErr := w.persQueue.FailJob(ctx, envelope.ID, err.Error()); failErr != nil {
-					w.logger.Error("failed to mark job as failed in database",
-						"error", failErr,
+				if dlqErr := w.persQueue.MoveToDLQ(ctx, envelope, err.Error()); dlqErr != nil {
+					w.logger.Error("failed to move job to DLQ",
+						"error", dlqErr,
 						"job_id", envelope.ID,
 						"original_error", err)
 					// Continue anyway - we still want to log the original failure
 				}
+				w.logger.Error("job handler error, moved to DLQ",
+					"error", err,
+					"job_id", envelope.ID,
+					"job_type", envelope.Type,
+					"attempts", envelope.Attempts,
+					"max_retries", envelope.MaxRetries)
 			} else if w.tracker != nil {
 				w.tracker.MarkFailed(envelope.ID, err)
+				w.logger.Error("job handler error",
+					"error", err,
+					"job_id", envelope.ID,
+					"job_type", envelope.Type,
+					"attempts", envelope.Attempts,
+					"max_retries", envelope.MaxRetries)
+			} else {
+				// No persistence or tracking, just log the error
+				w.logger.Error("job handler error",
+					"error", err,
+					"job_id", envelope.ID,
+					"job_type", envelope.Type,
+					"attempts", envelope.Attempts,
+					"max_retries", envelope.MaxRetries)
 			}
-			w.logger.Error("job handler error",
-				"error", err,
-				"job_id", envelope.ID,
-				"job_type", envelope.Type,
-				"attempts", envelope.Attempts,
-				"max_retries", envelope.MaxRetries)
 			return
 		}
 
@@ -121,8 +135,8 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 			"max_retries", envelope.MaxRetries)
 
 		if w.persQueue != nil {
-			backoffDelay := w.backoffFn(envelope.Attempts - 1)
-			time.Sleep(backoffDelay)
+			// In persistence mode, requeue immediately without blocking the worker
+			// This allows workers to remain available to process other jobs
 			if requeueErr := w.persQueue.RequeueJob(ctx, envelope); requeueErr != nil {
 				w.logger.Error("failed to requeue job for retry",
 					"error", requeueErr,
@@ -133,7 +147,7 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 			return // Exit retry loop - job will be picked up again from queue
 		}
 
-		// In-memory mode: retry immediately after backoff
+		// In-memory mode: retry after backoff delay
 		backoffDelay := w.backoffFn(envelope.Attempts - 1)
 		time.Sleep(backoffDelay)
 	}

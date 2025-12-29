@@ -309,6 +309,45 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 	return records
 }
 
+// MoveToDLQ moves a failed job to the dead letter queue
+func (q *SQLiteQueue) MoveToDLQ(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
+	query := `
+		UPDATE jobs
+		SET status = 'dlq', last_error = ?, attempts = ?, updated_at = ?, processed_at = ?
+		WHERE id = ?
+	`
+	now := time.Now()
+	_, err := q.db.ExecContext(ctx, query, errorMsg, env.Attempts, now, now, env.ID)
+	return err
+}
+
+// ListDLQJobs returns all jobs in the dead letter queue
+func (q *SQLiteQueue) ListDLQJobs(ctx context.Context) []*JobRecord {
+	return q.ListJobsByStatus(ctx, "dlq")
+}
+
+// RequeueDLQJob moves a job from DLQ back to pending status
+func (q *SQLiteQueue) RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error {
+	// First verify the job is in DLQ
+	record, exists := q.GetJob(ctx, jobID)
+	if !exists {
+		return fmt.Errorf("job not found: %s", jobID)
+	}
+
+	if record.Status != "dlq" {
+		return fmt.Errorf("job is not in DLQ")
+	}
+
+	// Reset attempts and move back to pending
+	query := `
+		UPDATE jobs
+		SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?
+		WHERE id = ?
+	`
+	_, err := q.db.ExecContext(ctx, query, time.Now(), jobID)
+	return err
+}
+
 // Close closes the database connection
 func (q *SQLiteQueue) Close() error {
 	return q.db.Close()
