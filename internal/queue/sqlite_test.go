@@ -705,23 +705,19 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create and enqueue a job
 		env, _ := jobs.NewEnvelope("test", []byte(`{}`))
 		env.MaxRetries = 3
 		q.Enqueue(ctx, env)
 
-		// Simulate job failing after max retries
 		job, _ := q.Dequeue(ctx)
 		job.Attempts = 4 // Exceeded max retries
 		errorMsg := "permanent failure after 4 attempts"
 
-		// Move to DLQ
 		err = q.MoveToDLQ(ctx, job.ID, errorMsg)
 		if err != nil {
 			t.Fatalf("MoveToDLQ failed: %v", err)
 		}
 
-		// Verify job is in DLQ
 		record, exists := q.GetJob(ctx, job.ID)
 		if !exists {
 			t.Fatal("job not found after moving to DLQ")
@@ -750,7 +746,6 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create multiple jobs and move them to DLQ
 		jobIDs := make([]jobs.JobID, 3)
 		for i := 0; i < 3; i++ {
 			env, _ := jobs.NewEnvelope(jobs.JobType("dlq-test"), []byte(`{}`))
@@ -760,18 +755,15 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 			jobIDs[i] = job.ID
 		}
 
-		// Create a non-DLQ job
 		normalEnv, _ := jobs.NewEnvelope("normal", []byte(`{}`))
 		q.Enqueue(ctx, normalEnv)
 
-		// List DLQ jobs
 		dlqJobs := q.ListDLQJobs(ctx)
 
 		if len(dlqJobs) != 3 {
 			t.Errorf("expected 3 DLQ jobs, got %d", len(dlqJobs))
 		}
 
-		// Verify all returned jobs are in DLQ
 		for _, record := range dlqJobs {
 			if record.Status != "dlq" {
 				t.Errorf("expected status 'dlq', got %s", record.Status)
@@ -789,7 +781,6 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create job and move to DLQ
 		env, _ := jobs.NewEnvelope("requeue-test", []byte(`{}`))
 		env.MaxRetries = 3
 		q.Enqueue(ctx, env)
@@ -798,13 +789,11 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 		job.Attempts = 4
 		q.MoveToDLQ(ctx, job.ID, "original error")
 
-		// Requeue from DLQ
 		err = q.RequeueDLQJob(ctx, job.ID)
 		if err != nil {
 			t.Fatalf("RequeueDLQJob failed: %v", err)
 		}
 
-		// Verify job is back in pending state
 		record, exists := q.GetJob(ctx, job.ID)
 		if !exists {
 			t.Fatal("job not found after requeue")
@@ -814,12 +803,10 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 			t.Errorf("expected status 'pending', got %s", record.Status)
 		}
 
-		// Attempts should be reset
 		if record.Attempts != 0 {
 			t.Errorf("expected 0 attempts after requeue, got %d", record.Attempts)
 		}
 
-		// Should be able to dequeue it
 		requeuedJob, err := q.Dequeue(ctx)
 		if err != nil {
 			t.Fatalf("failed to dequeue requeued job: %v", err)
@@ -840,7 +827,6 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create job with specific payload and priority
 		payload := []byte(`{"message":"test data"}`)
 		env, _ := jobs.NewEnvelope("preserve-test", payload)
 		env.Priority = 10
@@ -850,16 +836,13 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 		job, _ := q.Dequeue(ctx)
 		job.Attempts = 6
 
-		// Move to DLQ
 		q.MoveToDLQ(ctx, job.ID, "max retries exceeded")
 
-		// Retrieve from DLQ
 		record, exists := q.GetJob(ctx, job.ID)
 		if !exists {
 			t.Fatal("job not found in DLQ")
 		}
 
-		// Verify all metadata is preserved
 		if string(record.Payload) != string(payload) {
 			t.Errorf("payload not preserved: got %s, want %s", record.Payload, payload)
 		}
@@ -887,14 +870,12 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 
 		ctx := context.Background()
 
-		// Create a pending job
 		env, _ := jobs.NewEnvelope("pending-job", []byte(`{}`))
 		q.Enqueue(ctx, env)
 
 		job, _ := q.Dequeue(ctx)
 		q.CompleteJob(ctx, job.ID)
 
-		// Try to requeue completed job
 		err = q.RequeueDLQJob(ctx, job.ID)
 		if err == nil {
 			t.Error("expected error when requeueing non-DLQ job, got nil")
