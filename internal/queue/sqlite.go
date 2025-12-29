@@ -49,8 +49,9 @@ func NewSQLiteQueue(dbPath string) (*SQLiteQueue, error) {
 	return q, nil
 }
 
-// initSchema creates the jobs table if it doesn't exist
+// initSchema creates the jobs table if it doesn't exist and applies migrations
 func (q *SQLiteQueue) initSchema() error {
+	// Create base table structure (without indexes that depend on columns that might not exist)
 	schema := `
 	CREATE TABLE IF NOT EXISTS jobs (
 		id TEXT PRIMARY KEY,
@@ -65,13 +66,49 @@ func (q *SQLiteQueue) initSchema() error {
 		updated_at TIMESTAMP NOT NULL,
 		processed_at TIMESTAMP
 	);
-
-	CREATE INDEX IF NOT EXISTS idx_status_priority_created
-		ON jobs(status, priority DESC, created_at ASC);
 	`
 
-	_, err := q.db.Exec(schema)
-	return err
+	if _, err := q.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Apply migrations for existing databases (this will add missing columns)
+	if err := q.applyMigrations(); err != nil {
+		return err
+	}
+
+	// Create indexes after migrations to ensure all columns exist
+	indexSchema := `CREATE INDEX IF NOT EXISTS idx_status_priority_created ON jobs(status, priority DESC, created_at ASC);`
+	if _, err := q.db.Exec(indexSchema); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// applyMigrations handles schema evolution for existing databases
+func (q *SQLiteQueue) applyMigrations() error {
+	// Check if priority column exists (added in later version)
+	var columnExists bool
+	err := q.db.QueryRow(`
+		SELECT COUNT(*) > 0
+		FROM pragma_table_info('jobs')
+		WHERE name = 'priority'
+	`).Scan(&columnExists)
+
+	if err != nil {
+		return fmt.Errorf("failed to check for priority column: %w", err)
+	}
+
+	if !columnExists {
+		// Add priority column with default value
+		_, err := q.db.Exec(`ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			return fmt.Errorf("failed to add priority column: %w", err)
+		}
+	}
+
+	return nil
 }
 
 // recoverStuckJobs resets jobs that were processing when the server crashed

@@ -2,13 +2,81 @@ package queue
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
 )
+
+func TestSQLiteQueue_Migration(t *testing.T) {
+	t.Run("migrates old database without priority column", func(t *testing.T) {
+		dbPath := t.TempDir() + "/old.db"
+
+		// Create old-style database without priority column
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		oldSchema := `
+		CREATE TABLE jobs (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			payload BLOB NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			last_error TEXT,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			processed_at TIMESTAMP
+		);
+		`
+
+		if _, err := db.Exec(oldSchema); err != nil {
+			t.Fatal("Failed to create old schema:", err)
+		}
+
+		// Insert a job without priority
+		now := time.Now()
+		_, err = db.Exec(`
+			INSERT INTO jobs (id, type, payload, status, attempts, max_retries, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, "test-job-1", "test", []byte(`{}`), "pending", 0, 3, now, now)
+
+		if err != nil {
+			t.Fatal("Failed to insert job:", err)
+		}
+
+		db.Close()
+
+		// Now open with the new code (which should apply migrations)
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to open database with migrations: %v", err)
+		}
+		defer q.Close()
+
+		// Try to dequeue to verify priority column exists and has default value
+		ctx := context.Background()
+		job, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("Failed to dequeue after migration: %v", err)
+		}
+
+		if job.ID != "test-job-1" {
+			t.Errorf("expected job ID 'test-job-1', got %s", job.ID)
+		}
+
+		if job.Priority != 0 {
+			t.Errorf("expected priority 0 (default), got %d", job.Priority)
+		}
+	})
+}
 
 func TestSQLiteQueue_Enqueue(t *testing.T) {
 	t.Run("enqueues job successfully", func(t *testing.T) {
