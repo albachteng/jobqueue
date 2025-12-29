@@ -118,12 +118,9 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		return zero, err
 	}
 	defer func() {
-		// Rollback is safe to call even if transaction was committed
-		// In a defer, we can't meaningfully handle the error
-		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
-			// Log unexpected rollback errors (sql.ErrTxDone means already committed, which is expected)
-			// We can't return the error from a defer, so this is best effort
-		}
+		// Rollback is safe to call even if transaction was committed (returns sql.ErrTxDone)
+		// In a defer, we cannot meaningfully handle or return errors
+		_ = tx.Rollback() //nolint:errcheck // defer cleanup - error cannot be returned
 	}()
 
 	// Find oldest pending job
@@ -265,11 +262,8 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 	}
 	defer func() {
 		// Close is idempotent and safe to call multiple times
-		// Any error here is already handled by rows.Err() check below
-		if closeErr := rows.Close(); closeErr != nil {
-			// In a defer, we can't meaningfully return this error
-			// The caller should check rows.Err() after iteration
-		}
+		// Iteration errors are available via rows.Err() after the loop
+		_ = rows.Close() //nolint:errcheck // defer cleanup - error cannot be returned
 	}()
 
 	var records []*JobRecord
