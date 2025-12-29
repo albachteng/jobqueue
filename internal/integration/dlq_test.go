@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"testing"
 	"time"
@@ -11,7 +12,6 @@ import (
 	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/queue"
 	"github.com/albachteng/jobqueue/internal/worker"
-	"log/slog"
 )
 
 func TestDLQ_EndToEnd(t *testing.T) {
