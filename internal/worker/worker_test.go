@@ -231,12 +231,19 @@ func TestWorker_RespectsContext(t *testing.T) {
 
 	var count int
 	var mu sync.Mutex
+	firstJobProcessed := make(chan struct{})
+	var firstJobOnce sync.Once
 
 	handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
 		mu.Lock()
 		count++
 		mu.Unlock()
-		time.Sleep(10 * time.Millisecond)
+
+		firstJobOnce.Do(func() {
+			close(firstJobProcessed)
+		})
+
+		<-ctx.Done()
 		return nil
 	})
 
@@ -265,13 +272,13 @@ func TestWorker_RespectsContext(t *testing.T) {
 		}
 	}
 
-	time.Sleep(5 * time.Millisecond)
+	<-firstJobProcessed
 	cancel()
 
 	select {
 	case <-done:
 		// Worker stopped
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(50 * time.Millisecond):
 		t.Fatal("worker did not stop after context cancellation")
 	}
 
@@ -325,7 +332,7 @@ func TestWorker_StopsWhenChannelClosed(t *testing.T) {
 	select {
 	case <-done:
 		// Worker stopped
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(10 * time.Millisecond):
 		t.Fatal("worker did not stop after channel closed")
 	}
 
