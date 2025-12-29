@@ -2,12 +2,81 @@ package queue
 
 import (
 	"context"
+	"database/sql"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
 )
+
+func TestSQLiteQueue_Migration(t *testing.T) {
+	t.Run("migrates old database without priority column", func(t *testing.T) {
+		dbPath := t.TempDir() + "/old.db"
+
+		// Create old-style database without priority column
+		db, err := sql.Open("sqlite3", dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		oldSchema := `
+		CREATE TABLE jobs (
+			id TEXT PRIMARY KEY,
+			type TEXT NOT NULL,
+			payload BLOB NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			attempts INTEGER NOT NULL DEFAULT 0,
+			max_retries INTEGER NOT NULL DEFAULT 3,
+			last_error TEXT,
+			created_at TIMESTAMP NOT NULL,
+			updated_at TIMESTAMP NOT NULL,
+			processed_at TIMESTAMP
+		);
+		`
+
+		if _, err := db.Exec(oldSchema); err != nil {
+			t.Fatal("Failed to create old schema:", err)
+		}
+
+		// Insert a job without priority
+		now := time.Now()
+		_, err = db.Exec(`
+			INSERT INTO jobs (id, type, payload, status, attempts, max_retries, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+		`, "test-job-1", "test", []byte(`{}`), "pending", 0, 3, now, now)
+
+		if err != nil {
+			t.Fatal("Failed to insert job:", err)
+		}
+
+		db.Close()
+
+		// Now open with the new code (which should apply migrations)
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("Failed to open database with migrations: %v", err)
+		}
+		defer q.Close()
+
+		// Try to dequeue to verify priority column exists and has default value
+		ctx := context.Background()
+		job, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("Failed to dequeue after migration: %v", err)
+		}
+
+		if job.ID != "test-job-1" {
+			t.Errorf("expected job ID 'test-job-1', got %s", job.ID)
+		}
+
+		if job.Priority != 0 {
+			t.Errorf("expected priority 0 (default), got %d", job.Priority)
+		}
+	})
+}
 
 func TestSQLiteQueue_Enqueue(t *testing.T) {
 	t.Run("enqueues job successfully", func(t *testing.T) {
@@ -690,6 +759,201 @@ func TestSQLiteQueue_PriorityQueuing(t *testing.T) {
 			if job.Type != expectedType {
 				t.Errorf("position %d: got type %s, want %s", i, job.Type, expectedType)
 			}
+		}
+	})
+}
+
+func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
+	t.Run("moves failed job to DLQ with error", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		env, _ := jobs.NewEnvelope("test", []byte(`{}`))
+		env.MaxRetries = 3
+		q.Enqueue(ctx, env)
+
+		job, _ := q.Dequeue(ctx)
+		job.Attempts = 4 // Exceeded max retries
+
+		errorMsg := "permanent failure after 4 attempts"
+
+		err = q.MoveToDLQ(ctx, job, errorMsg)
+		if err != nil {
+			t.Fatalf("MoveToDLQ failed: %v", err)
+		}
+
+		record, exists := q.GetJob(ctx, job.ID)
+		if !exists {
+			t.Fatal("job not found after moving to DLQ")
+		}
+
+		if record.Status != "dlq" {
+			t.Errorf("expected status 'dlq', got %s", record.Status)
+		}
+
+		if record.LastError != errorMsg {
+			t.Errorf("expected error %q, got %q", errorMsg, record.LastError)
+		}
+
+		if record.Attempts != 4 {
+			t.Errorf("expected 4 attempts, got %d", record.Attempts)
+		}
+	})
+
+	t.Run("lists all DLQ jobs", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		jobIDs := make([]jobs.JobID, 3)
+		for i := 0; i < 3; i++ {
+			env, _ := jobs.NewEnvelope(jobs.JobType("dlq-test"), []byte(`{}`))
+			q.Enqueue(ctx, env)
+			job, _ := q.Dequeue(ctx)
+			q.MoveToDLQ(ctx, job, "test error")
+			jobIDs[i] = job.ID
+		}
+
+		normalEnv, _ := jobs.NewEnvelope("normal", []byte(`{}`))
+		q.Enqueue(ctx, normalEnv)
+
+		dlqJobs := q.ListDLQJobs(ctx)
+
+		if len(dlqJobs) != 3 {
+			t.Errorf("expected 3 DLQ jobs, got %d", len(dlqJobs))
+		}
+
+		for _, record := range dlqJobs {
+			if record.Status != "dlq" {
+				t.Errorf("expected status 'dlq', got %s", record.Status)
+			}
+		}
+	})
+
+	t.Run("requeues job from DLQ", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		env, _ := jobs.NewEnvelope("requeue-test", []byte(`{}`))
+		env.MaxRetries = 3
+		q.Enqueue(ctx, env)
+
+		job, _ := q.Dequeue(ctx)
+		job.Attempts = 4
+		q.MoveToDLQ(ctx, job, "original error")
+
+		err = q.RequeueDLQJob(ctx, job.ID)
+		if err != nil {
+			t.Fatalf("RequeueDLQJob failed: %v", err)
+		}
+
+		record, exists := q.GetJob(ctx, job.ID)
+		if !exists {
+			t.Fatal("job not found after requeue")
+		}
+
+		if record.Status != "pending" {
+			t.Errorf("expected status 'pending', got %s", record.Status)
+		}
+
+		if record.Attempts != 0 {
+			t.Errorf("expected 0 attempts after requeue, got %d", record.Attempts)
+		}
+
+		requeuedJob, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("failed to dequeue requeued job: %v", err)
+		}
+
+		if requeuedJob.ID != job.ID {
+			t.Errorf("dequeued wrong job: got %s, want %s", requeuedJob.ID, job.ID)
+		}
+	})
+
+	t.Run("DLQ job preserves payload and metadata", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		payload := json.RawMessage(`{"message":"test data"}`)
+		env, _ := jobs.NewEnvelope("preserve-test", payload)
+		env.Priority = 10
+		env.MaxRetries = 5
+		q.Enqueue(ctx, env)
+
+		job, _ := q.Dequeue(ctx)
+		job.Attempts = 6
+
+		q.MoveToDLQ(ctx, job, "max retries exceeded")
+
+		record, exists := q.GetJob(ctx, job.ID)
+		if !exists {
+			t.Fatal("job not found in DLQ")
+		}
+
+		if string(record.Payload) != string(payload) {
+			t.Errorf("payload not preserved: got %s, want %s", record.Payload, payload)
+		}
+
+		if record.Priority != 10 {
+			t.Errorf("priority not preserved: got %d, want 10", record.Priority)
+		}
+
+		if record.MaxRetries != 5 {
+			t.Errorf("max_retries not preserved: got %d, want 5", record.MaxRetries)
+		}
+
+		if record.Type != "preserve-test" {
+			t.Errorf("type not preserved: got %s, want preserve-test", record.Type)
+		}
+	})
+
+	t.Run("cannot requeue job not in DLQ", func(t *testing.T) {
+		dbPath := filepath.Join(t.TempDir(), "test.db")
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		env, _ := jobs.NewEnvelope("pending-job", []byte(`{}`))
+		q.Enqueue(ctx, env)
+
+		job, _ := q.Dequeue(ctx)
+		q.CompleteJob(ctx, job.ID)
+
+		err = q.RequeueDLQJob(ctx, job.ID)
+		if err == nil {
+			t.Error("expected error when requeueing non-DLQ job, got nil")
+		}
+
+		expectedErr := "job is not in DLQ"
+		if err.Error() != expectedErr {
+			t.Errorf("expected error %q, got %q", expectedErr, err.Error())
 		}
 	})
 }

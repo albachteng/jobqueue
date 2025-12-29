@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
+	"github.com/albachteng/jobqueue/internal/queue"
 	"github.com/albachteng/jobqueue/internal/tracking"
 )
 
@@ -73,6 +74,42 @@ func (s *Server) HandleListJobs(w http.ResponseWriter, r *http.Request) {
 
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(jobList)
+}
+
+func (s *Server) HandleListDLQ(w http.ResponseWriter, r *http.Request) {
+	persQueue, ok := s.Queue.(queue.PersistentQueue)
+	if !ok {
+		http.Error(w, "DLQ not available in non-persistent mode", http.StatusNotImplemented)
+		return
+	}
+
+	dlqJobs := persQueue.ListDLQJobs(r.Context())
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(dlqJobs)
+}
+
+func (s *Server) HandleRequeueDLQ(w http.ResponseWriter, r *http.Request) {
+	persQueue, ok := s.Queue.(queue.PersistentQueue)
+	if !ok {
+		http.Error(w, "DLQ not available in non-persistent mode", http.StatusNotImplemented)
+		return
+	}
+
+	jobID := jobs.JobID(r.PathValue("id"))
+
+	if err := persQueue.RequeueDLQJob(r.Context(), jobID); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	s.Logger.Info("job requeued from DLQ", "job_id", jobID)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "requeued",
+		"job_id": string(jobID),
+	})
 }
 
 func HandleRoot(w http.ResponseWriter, r *http.Request) {

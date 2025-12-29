@@ -32,7 +32,7 @@ PORT=3000 go run ./cmd/server
 
 - `GET /` - Hello World
 - `GET /health` - Health check
-- `POST /jobs` - Enqueue a job (JSON payload with `type` and `payload`)
+- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority`)
 - `GET /jobs/{id}` - Get job status by ID
 - `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed`)
 
@@ -75,6 +75,44 @@ curl -s "http://localhost:8080/jobs?status=completed" | jq
 ```
 
 Jobs are automatically processed by background workers. Use the status endpoints to track progress.
+
+## Priority Queue
+
+Jobs can be assigned priority values to control processing order. Higher priority jobs are processed first, with FIFO ordering within the same priority level.
+
+- **Default priority**: 0
+- **Higher numbers** = higher priority (e.g., priority 10 > priority 5 > priority 0)
+- **Negative priorities** are supported (e.g., -5 for low-priority background tasks)
+
+### Priority Examples
+
+```bash
+# High priority job (processed first)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": "urgent task", "priority": 10}'
+
+# Normal priority job
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": "normal task", "priority": 5}'
+
+# Default priority (0) - omit priority field
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": "default priority task"}'
+
+# Low priority background job
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": "background task", "priority": -5}'
+```
+
+When multiple jobs are queued, they will be processed in order:
+1. Priority 10 jobs (FIFO within priority)
+2. Priority 5 jobs (FIFO within priority)
+3. Priority 0 jobs (FIFO within priority)
+4. Priority -5 jobs (FIFO within priority)
 
 ## Retry Logic
 
