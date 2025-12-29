@@ -57,17 +57,23 @@ func main() {
 
 	shutdownManager := shutdown.NewManagerWithTimeout(context.Background(), 30*time.Second, logger)
 
-	shutdownManager.RegisterTask("http-server", func(ctx context.Context) error {
+	if err := shutdownManager.RegisterTask("http-server", func(ctx context.Context) error {
 		logger.Info("shutting down HTTP server")
 		return httpServer.Shutdown(ctx)
-	})
+	}); err != nil {
+		logger.Error("failed to register http-server shutdown task", "error", err)
+		os.Exit(1)
+	}
 
-	shutdownManager.RegisterTask("dispatcher", func(ctx context.Context) error {
+	if err := shutdownManager.RegisterTask("dispatcher", func(ctx context.Context) error {
 		logger.Info("shutting down dispatcher")
 		cancel() // Cancel dispatcher context
 		dispatcher.Stop()
 		return nil
-	})
+	}); err != nil {
+		logger.Error("failed to register dispatcher shutdown task", "error", err)
+		os.Exit(1)
+	}
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGTERM, syscall.SIGINT)
