@@ -10,6 +10,25 @@ import (
 	"github.com/albachteng/jobqueue/internal/queue"
 )
 
+// waitForCondition polls a condition function until it returns true or times out
+func waitForCondition(t *testing.T, condition func() bool, timeout time.Duration, message string) {
+	t.Helper()
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-deadline:
+			t.Fatalf("timeout waiting for: %s", message)
+		case <-ticker.C:
+			if condition() {
+				return
+			}
+		}
+	}
+}
+
 func TestDispatcher_StartsWorkers(t *testing.T) {
 	ctx := context.Background()
 	q := queue.NewInMemoryQueue[*jobs.Envelope]()
@@ -43,7 +62,12 @@ func TestDispatcher_StartsWorkers(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(processed) == 5
+	}, 2*time.Second, "all 5 jobs to be processed")
+
 	cancel()
 	dispatcher.Stop()
 
@@ -102,7 +126,12 @@ func TestDispatcher_RoutesEnvelopes(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(100 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return echoCount == 3 && emailCount == 2
+	}, 2*time.Second, "all jobs to be routed and processed")
+
 	cancel()
 	dispatcher.Stop()
 
@@ -164,7 +193,12 @@ func TestDispatcher_ConcurrentProcessing(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(200 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return count == numJobs
+	}, 2*time.Second, "all 10 jobs to be processed")
+
 	cancel()
 	dispatcher.Stop()
 
@@ -214,7 +248,11 @@ func TestDispatcher_GracefulShutdown(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(30 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(completed) > 0
+	}, 2*time.Second, "at least one job to start processing")
 
 	cancel()
 	dispatcher.Stop()
@@ -260,7 +298,12 @@ func TestDispatcher_HandlesEmptyQueue(t *testing.T) {
 		Status: "pending",
 	})
 
-	time.Sleep(50 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return count == 1
+	}, 2*time.Second, "delayed job to be processed")
+
 	dispatcher.Stop()
 
 	mu.Lock()
@@ -321,7 +364,12 @@ func TestDispatcher_WorkersShareRegistry(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(150 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return count == 10
+	}, 2*time.Second, "all 10 jobs to be processed")
+
 	cancel()
 	dispatcher.Stop()
 
@@ -370,7 +418,12 @@ func TestDispatcher_NoJobProcessedTwice(t *testing.T) {
 
 	go dispatcher.Start(dispatchCtx)
 
-	time.Sleep(200 * time.Millisecond)
+	waitForCondition(t, func() bool {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(processedIDs) == numJobs
+	}, 2*time.Second, "all 20 jobs to be processed")
+
 	cancel()
 	dispatcher.Stop()
 

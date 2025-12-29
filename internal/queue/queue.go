@@ -19,5 +19,8 @@ type PersistentQueue interface {
 	RequeueJob(ctx context.Context, env *jobs.Envelope) error
 	GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord, bool)
 	ListJobsByStatus(ctx context.Context, status string) []*JobRecord
+	MoveToDLQ(ctx context.Context, env *jobs.Envelope, errorMsg string) error
+	ListDLQJobs(ctx context.Context) []*JobRecord
+	RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error
 	Close() error
 }
