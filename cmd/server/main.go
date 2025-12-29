@@ -11,6 +11,7 @@ import (
 	"github.com/albachteng/jobqueue/internal/api"
 	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/logging"
+	"github.com/albachteng/jobqueue/internal/queue"
 	"github.com/albachteng/jobqueue/internal/shutdown"
 	"github.com/albachteng/jobqueue/internal/worker"
 )
@@ -27,9 +28,28 @@ func main() {
 		return nil
 	}))
 
-	srv := api.NewServer(registry, logger)
+	// Create persistent queue with SQLite
+	dbPath := os.Getenv("DB_PATH")
+	if dbPath == "" {
+		dbPath = "data/jobqueue.db"
+	}
 
-	dispatcher := worker.NewDispatcher(srv.Queue, 5, registry, srv.Tracker, logger)
+	// Ensure data directory exists
+	if err := os.MkdirAll("data", 0755); err != nil {
+		logger.Error("failed to create data directory", "error", err)
+		os.Exit(1)
+	}
+
+	persQueue, err := queue.NewSQLiteQueue(dbPath)
+	if err != nil {
+		logger.Error("failed to create persistent queue", "error", err)
+		os.Exit(1)
+	}
+
+	srv := api.NewServer(registry, logger)
+	srv.Queue = persQueue // Use persistent queue
+
+	dispatcher := worker.NewDispatcher(persQueue, 5, registry, srv.Tracker, logger)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -72,6 +92,14 @@ func main() {
 		return nil
 	}); err != nil {
 		logger.Error("failed to register dispatcher shutdown task", "error", err)
+		os.Exit(1)
+	}
+
+	if err := shutdownManager.RegisterTask("database", func(ctx context.Context) error {
+		logger.Info("closing database connection")
+		return persQueue.Close()
+	}); err != nil {
+		logger.Error("failed to register database shutdown task", "error", err)
 		os.Exit(1)
 	}
 
