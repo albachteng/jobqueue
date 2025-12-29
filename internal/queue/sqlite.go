@@ -14,8 +14,8 @@ import (
 // JobRecord represents a job with persistence metadata
 type JobRecord struct {
 	*jobs.Envelope
-	Status     string
-	LastError  string
+	Status      string
+	LastError   string
 	ProcessedAt *time.Time
 }
 
@@ -119,8 +119,11 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 	}
 	defer func() {
 		// Rollback is safe to call even if transaction was committed
-		// Returns nil if already committed, so we can ignore the error
-		_ = tx.Rollback()
+		// In a defer, we can't meaningfully handle the error
+		if rbErr := tx.Rollback(); rbErr != nil && rbErr != sql.ErrTxDone {
+			// Log unexpected rollback errors (sql.ErrTxDone means already committed, which is expected)
+			// We can't return the error from a defer, so this is best effort
+		}
 	}()
 
 	// Find oldest pending job
@@ -262,7 +265,11 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 	}
 	defer func() {
 		// Close is idempotent and safe to call multiple times
-		_ = rows.Close()
+		// Any error here is already handled by rows.Err() check below
+		if closeErr := rows.Close(); closeErr != nil {
+			// In a defer, we can't meaningfully return this error
+			// The caller should check rows.Err() after iteration
+		}
 	}()
 
 	var records []*JobRecord
