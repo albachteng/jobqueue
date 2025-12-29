@@ -76,7 +76,12 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 		if err == nil {
 			// Job completed successfully
 			if w.persQueue != nil {
-				w.persQueue.CompleteJob(ctx, envelope.ID)
+				if completeErr := w.persQueue.CompleteJob(ctx, envelope.ID); completeErr != nil {
+					w.logger.Error("failed to mark job as completed in database",
+						"error", completeErr,
+						"job_id", envelope.ID)
+					// Continue anyway - job executed successfully
+				}
 			} else if w.tracker != nil {
 				w.tracker.MarkCompleted(envelope.ID)
 			}
@@ -92,7 +97,13 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 		if !shouldRetry {
 			// Job failed permanently
 			if w.persQueue != nil {
-				w.persQueue.FailJob(ctx, envelope.ID, err.Error())
+				if failErr := w.persQueue.FailJob(ctx, envelope.ID, err.Error()); failErr != nil {
+					w.logger.Error("failed to mark job as failed in database",
+						"error", failErr,
+						"job_id", envelope.ID,
+						"original_error", err)
+					// Continue anyway - we still want to log the original failure
+				}
 			} else if w.tracker != nil {
 				w.tracker.MarkFailed(envelope.ID, err)
 			}
@@ -116,7 +127,13 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 		if w.persQueue != nil {
 			backoffDelay := w.backoffFn(envelope.Attempts - 1)
 			time.Sleep(backoffDelay)
-			w.persQueue.RequeueJob(ctx, envelope)
+			if requeueErr := w.persQueue.RequeueJob(ctx, envelope); requeueErr != nil {
+				w.logger.Error("failed to requeue job for retry",
+					"error", requeueErr,
+					"job_id", envelope.ID,
+					"attempts", envelope.Attempts)
+				// Job is stuck in "processing" state - will be recovered on restart
+			}
 			return // Exit retry loop - job will be picked up again from queue
 		}
 

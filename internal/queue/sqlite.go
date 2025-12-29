@@ -33,13 +33,17 @@ func NewSQLiteQueue(dbPath string) (*SQLiteQueue, error) {
 
 	q := &SQLiteQueue{db: db}
 	if err := q.initSchema(); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, fmt.Errorf("failed to initialize schema: %w (close error: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
 	// Recover stuck jobs on startup
 	if err := q.recoverStuckJobs(); err != nil {
-		db.Close()
+		if closeErr := db.Close(); closeErr != nil {
+			return nil, fmt.Errorf("failed to recover stuck jobs: %w (close error: %v)", err, closeErr)
+		}
 		return nil, fmt.Errorf("failed to recover stuck jobs: %w", err)
 	}
 
@@ -113,7 +117,11 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		var zero *jobs.Envelope
 		return zero, err
 	}
-	defer tx.Rollback()
+	defer func() {
+		// Rollback is safe to call even if transaction was committed
+		// Returns nil if already committed, so we can ignore the error
+		_ = tx.Rollback()
+	}()
 
 	// Find oldest pending job
 	query := `
@@ -252,7 +260,10 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 	if err != nil {
 		return []*JobRecord{}
 	}
-	defer rows.Close()
+	defer func() {
+		// Close is idempotent and safe to call multiple times
+		_ = rows.Close()
+	}()
 
 	var records []*JobRecord
 	for rows.Next() {
