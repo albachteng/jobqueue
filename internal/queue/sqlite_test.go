@@ -1063,7 +1063,6 @@ func TestSQLiteQueue_ScheduledJobs(t *testing.T) {
 
 		// Then enqueue immediate job
 		immediateEnv, _ := jobs.NewEnvelope("immediate", []byte(`{}`))
-		// ScheduledAt is nil by default
 		q.Enqueue(ctx, immediateEnv)
 
 		// Immediate job should be dequeued first
