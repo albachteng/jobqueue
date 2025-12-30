@@ -957,3 +957,213 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 		}
 	})
 }
+
+func TestSQLiteQueue_ScheduledJobs(t *testing.T) {
+	t.Run("does not dequeue jobs scheduled in the future", func(t *testing.T) {
+		dbPath := t.TempDir() + "/scheduled.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue job scheduled 1 hour in the future
+		futureTime := time.Now().Add(1 * time.Hour)
+		env, _ := jobs.NewEnvelope("future-job", []byte(`{}`))
+		env.ScheduledAt = &futureTime
+
+		if err := q.Enqueue(ctx, env); err != nil {
+			t.Fatalf("failed to enqueue scheduled job: %v", err)
+		}
+
+		// Try to dequeue - should return empty queue
+		job, err := q.Dequeue(ctx)
+		if err != ErrEmptyQueue {
+			t.Errorf("expected ErrEmptyQueue, got: %v, job: %v", err, job)
+		}
+	})
+
+	t.Run("dequeues jobs scheduled in the past", func(t *testing.T) {
+		dbPath := t.TempDir() + "/past.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue job scheduled in the past
+		pastTime := time.Now().Add(-1 * time.Hour)
+		env, _ := jobs.NewEnvelope("past-job", []byte(`{}`))
+		env.ScheduledAt = &pastTime
+
+		if err := q.Enqueue(ctx, env); err != nil {
+			t.Fatalf("failed to enqueue past scheduled job: %v", err)
+		}
+
+		// Should dequeue immediately
+		job, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("failed to dequeue past scheduled job: %v", err)
+		}
+
+		if job.ID != env.ID {
+			t.Errorf("expected job ID %s, got %s", env.ID, job.ID)
+		}
+	})
+
+	t.Run("dequeues jobs scheduled for now", func(t *testing.T) {
+		dbPath := t.TempDir() + "/now.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue job scheduled for now
+		now := time.Now()
+		env, _ := jobs.NewEnvelope("now-job", []byte(`{}`))
+		env.ScheduledAt = &now
+
+		if err := q.Enqueue(ctx, env); err != nil {
+			t.Fatalf("failed to enqueue job: %v", err)
+		}
+
+		// Should dequeue immediately
+		job, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("failed to dequeue job: %v", err)
+		}
+
+		if job.ID != env.ID {
+			t.Errorf("expected job ID %s, got %s", env.ID, job.ID)
+		}
+	})
+
+	t.Run("immediate jobs (nil ScheduledAt) are dequeued first", func(t *testing.T) {
+		dbPath := t.TempDir() + "/immediate.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		// Enqueue scheduled job first
+		futureTime := time.Now().Add(-10 * time.Minute)
+		scheduledEnv, _ := jobs.NewEnvelope("scheduled", []byte(`{}`))
+		scheduledEnv.ScheduledAt = &futureTime
+		q.Enqueue(ctx, scheduledEnv)
+
+		// Then enqueue immediate job
+		immediateEnv, _ := jobs.NewEnvelope("immediate", []byte(`{}`))
+		// ScheduledAt is nil by default
+		q.Enqueue(ctx, immediateEnv)
+
+		// Immediate job should be dequeued first
+		job, err := q.Dequeue(ctx)
+		if err != nil {
+			t.Fatalf("failed to dequeue: %v", err)
+		}
+
+		if job.Type != "immediate" {
+			t.Errorf("expected immediate job first, got type: %s", job.Type)
+		}
+	})
+
+	t.Run("scheduled jobs ordered by scheduled time then priority", func(t *testing.T) {
+		dbPath := t.TempDir() + "/ordering.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q.Close()
+
+		ctx := context.Background()
+
+		now := time.Now()
+
+		// Enqueue jobs with different scheduled times and priorities
+		// Job 1: scheduled 2 min ago, priority 0
+		time1 := now.Add(-2 * time.Minute)
+		env1, _ := jobs.NewEnvelope("job1", []byte(`{}`))
+		env1.ScheduledAt = &time1
+		env1.Priority = 0
+		q.Enqueue(ctx, env1)
+
+		// Job 2: scheduled 1 min ago, priority 10 (higher)
+		time2 := now.Add(-1 * time.Minute)
+		env2, _ := jobs.NewEnvelope("job2", []byte(`{}`))
+		env2.ScheduledAt = &time2
+		env2.Priority = 10
+		q.Enqueue(ctx, env2)
+
+		// Job 3: scheduled 1 min ago, priority 5
+		time3 := now.Add(-1 * time.Minute)
+		env3, _ := jobs.NewEnvelope("job3", []byte(`{}`))
+		env3.ScheduledAt = &time3
+		env3.Priority = 5
+		q.Enqueue(ctx, env3)
+
+		// Dequeue order should be: job1 (earliest), then job2 (higher priority), then job3
+		job1, _ := q.Dequeue(ctx)
+		if job1.Type != "job1" {
+			t.Errorf("expected job1 first (earliest scheduled), got: %s", job1.Type)
+		}
+
+		job2, _ := q.Dequeue(ctx)
+		if job2.Type != "job2" {
+			t.Errorf("expected job2 second (higher priority), got: %s", job2.Type)
+		}
+
+		job3, _ := q.Dequeue(ctx)
+		if job3.Type != "job3" {
+			t.Errorf("expected job3 third, got: %s", job3.Type)
+		}
+	})
+
+	t.Run("preserves scheduled time across persistence", func(t *testing.T) {
+		dbPath := t.TempDir() + "/persist.db"
+		q, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		ctx := context.Background()
+
+		scheduledTime := time.Now().Add(1 * time.Hour)
+		env, _ := jobs.NewEnvelope("scheduled", []byte(`{}`))
+		env.ScheduledAt = &scheduledTime
+
+		if err := q.Enqueue(ctx, env); err != nil {
+			t.Fatalf("failed to enqueue: %v", err)
+		}
+
+		q.Close()
+
+		// Reopen database
+		q2, err := NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer q2.Close()
+
+		// Retrieve the job (not dequeue since it's in the future)
+		record, exists := q2.GetJob(ctx, env.ID)
+		if !exists {
+			t.Fatal("job not found after reopening database")
+		}
+
+		if record.ScheduledAt == nil {
+			t.Error("scheduled time was lost")
+		} else if !record.ScheduledAt.Equal(scheduledTime) {
+			t.Errorf("scheduled time mismatch: got %v, want %v", record.ScheduledAt, scheduledTime)
+		}
+	})
+}
