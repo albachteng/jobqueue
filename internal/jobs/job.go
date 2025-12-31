@@ -19,14 +19,15 @@ type Job[T any] struct {
 }
 
 type Envelope struct {
-	ID         JobID           `json:"id"`
-	Type       JobType         `json:"type"`
-	Payload    json.RawMessage `json:"payload"`
-	CreatedAt  time.Time       `json:"created_at"`
-	Status     string          `json:"status,omitempty"`
-	Priority   int             `json:"priority,omitempty"`
-	MaxRetries int             `json:"max_retries,omitempty"`
-	Attempts   int             `json:"attempts,omitempty"`
+	ID          JobID           `json:"id"`
+	Type        JobType         `json:"type"`
+	Payload     json.RawMessage `json:"payload"`
+	CreatedAt   time.Time       `json:"created_at"`
+	Status      string          `json:"status,omitempty"`
+	Priority    int             `json:"priority,omitempty"`
+	MaxRetries  int             `json:"max_retries,omitempty"`
+	Attempts    int             `json:"attempts,omitempty"`
+	ScheduledAt *time.Time      `json:"scheduled_at,omitempty"`
 }
 
 func NewEnvelope(jobType JobType, payload any) (*Envelope, error) {

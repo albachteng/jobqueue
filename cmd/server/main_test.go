@@ -151,6 +151,39 @@ func TestHTTP_EnqueueJob(t *testing.T) {
 			t.Errorf("got status %d, want %d", w.Code, http.StatusCreated)
 		}
 	})
+
+	t.Run("accepts scheduled_at for future jobs", func(t *testing.T) {
+		futureTime := time.Now().Add(1 * time.Hour)
+		reqBody := api.EnqueueRequest{
+			Type:        "echo",
+			Payload:     json.RawMessage(`{"message":"scheduled"}`),
+			ScheduledAt: &futureTime,
+		}
+		body, _ := json.Marshal(reqBody)
+
+		req := httptest.NewRequest(http.MethodPost, "/jobs", bytes.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		srv.HandleEnqueue(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Errorf("got status %d, want %d", w.Code, http.StatusCreated)
+		}
+
+		var response api.EnqueueResponse
+		if err := json.NewDecoder(w.Body).Decode(&response); err != nil {
+			t.Fatalf("failed to decode response: %v", err)
+		}
+
+		if response.JobID == "" {
+			t.Error("expected non-empty job ID")
+		}
+
+		if response.Status != "enqueued" {
+			t.Errorf("got status %q, want %q", response.Status, "enqueued")
+		}
+	})
 }
 
 func TestHTTP_GetJob(t *testing.T) {
