@@ -29,6 +29,7 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	envelope.Priority = req.Priority
+	envelope.ScheduledAt = req.ScheduledAt
 
 	s.Tracker.Register(envelope)
 
