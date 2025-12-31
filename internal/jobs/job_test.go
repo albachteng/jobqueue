@@ -337,3 +337,55 @@ func TestEnvelope_Serialization(t *testing.T) {
 		}
 	})
 }
+
+func TestEnvelope_ScheduledAt(t *testing.T) {
+	t.Run("serializes scheduled time correctly", func(t *testing.T) {
+		payload := EchoPayload{Message: "scheduled"}
+		envelope, _ := NewEnvelope("echo", payload)
+
+		scheduledTime := time.Now().Add(1 * time.Hour)
+		envelope.ScheduledAt = &scheduledTime
+
+		jsonBytes, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("failed to marshal envelope: %v", err)
+		}
+
+		var decoded Envelope
+		if err := json.Unmarshal(jsonBytes, &decoded); err != nil {
+			t.Fatalf("failed to unmarshal envelope: %v", err)
+		}
+
+		if decoded.ScheduledAt == nil {
+			t.Fatal("scheduled time was lost during serialization")
+		}
+
+		if !decoded.ScheduledAt.Truncate(time.Second).Equal(scheduledTime.Truncate(time.Second)) {
+			t.Errorf("scheduled time mismatch: got %v, want %v", decoded.ScheduledAt, scheduledTime)
+		}
+	})
+
+	t.Run("handles nil ScheduledAt (immediate jobs)", func(t *testing.T) {
+		payload := EchoPayload{Message: "immediate"}
+		envelope, _ := NewEnvelope("echo", payload)
+
+		// ScheduledAt should be nil for immediate jobs
+		if envelope.ScheduledAt != nil {
+			t.Error("new envelope should have nil ScheduledAt for immediate execution")
+		}
+
+		jsonBytes, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("failed to marshal envelope: %v", err)
+		}
+
+		var decoded Envelope
+		if err := json.Unmarshal(jsonBytes, &decoded); err != nil {
+			t.Fatalf("failed to unmarshal envelope: %v", err)
+		}
+
+		if decoded.ScheduledAt != nil {
+			t.Error("decoded envelope should have nil ScheduledAt")
+		}
+	})
+}

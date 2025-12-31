@@ -64,7 +64,8 @@ func (q *SQLiteQueue) initSchema() error {
 		last_error TEXT,
 		created_at TIMESTAMP NOT NULL,
 		updated_at TIMESTAMP NOT NULL,
-		processed_at TIMESTAMP
+		processed_at TIMESTAMP,
+		scheduled_at TIMESTAMP
 	);
 	`
 
@@ -72,12 +73,10 @@ func (q *SQLiteQueue) initSchema() error {
 		return err
 	}
 
-	// Apply migrations for existing databases (this will add missing columns)
 	if err := q.applyMigrations(); err != nil {
 		return err
 	}
 
-	// Create indexes after migrations to ensure all columns exist
 	indexSchema := `CREATE INDEX IF NOT EXISTS idx_status_priority_created ON jobs(status, priority DESC, created_at ASC);`
 	if _, err := q.db.Exec(indexSchema); err != nil {
 		return err
@@ -88,23 +87,40 @@ func (q *SQLiteQueue) initSchema() error {
 
 // applyMigrations handles schema evolution for existing databases
 func (q *SQLiteQueue) applyMigrations() error {
-	// Check if priority column exists (added in later version)
-	var columnExists bool
+	var priorityExists bool
 	err := q.db.QueryRow(`
 		SELECT COUNT(*) > 0
 		FROM pragma_table_info('jobs')
 		WHERE name = 'priority'
-	`).Scan(&columnExists)
+	`).Scan(&priorityExists)
 
 	if err != nil {
 		return fmt.Errorf("failed to check for priority column: %w", err)
 	}
 
-	if !columnExists {
-		// Add priority column with default value
+	if !priorityExists {
 		_, err := q.db.Exec(`ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0`)
 		if err != nil {
 			return fmt.Errorf("failed to add priority column: %w", err)
+		}
+	}
+
+	var scheduledAtExists bool
+	err = q.db.QueryRow(`
+		SELECT COUNT(*) > 0
+		FROM pragma_table_info('jobs')
+		WHERE name = 'scheduled_at'
+	`).Scan(&scheduledAtExists)
+
+	if err != nil {
+		return fmt.Errorf("failed to check for scheduled_at column: %w", err)
+	}
+
+	if !scheduledAtExists {
+		// Add scheduled_at column (NULL by default, meaning immediate execution)
+		_, err := q.db.Exec(`ALTER TABLE jobs ADD COLUMN scheduled_at TIMESTAMP`)
+		if err != nil {
+			return fmt.Errorf("failed to add scheduled_at column: %w", err)
 		}
 	}
 
@@ -125,8 +141,8 @@ func (q *SQLiteQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
 	}
 
 	query := `
-		INSERT INTO jobs (id, type, payload, status, priority, attempts, max_retries, created_at, updated_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?)
+		INSERT INTO jobs (id, type, payload, status, priority, attempts, max_retries, created_at, updated_at, scheduled_at)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := q.db.ExecContext(ctx, query,
@@ -138,6 +154,7 @@ func (q *SQLiteQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
 		env.MaxRetries,
 		env.CreatedAt,
 		time.Now(),
+		env.ScheduledAt,
 	)
 
 	return err
@@ -161,18 +178,20 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		_ = tx.Rollback() //nolint:errcheck
 	}()
 
-	// Find highest priority pending job (FIFO within same priority)
+	// Find highest priority pending job that's ready to run
+	// Immediate jobs (NULL scheduled_at) come first, then by scheduled time, then priority
 	query := `
-		SELECT id, type, payload, priority, attempts, max_retries, created_at
+		SELECT id, type, payload, priority, attempts, max_retries, created_at, scheduled_at
 		FROM jobs
-		WHERE status = 'pending'
-		ORDER BY priority DESC, created_at ASC
+		WHERE status = 'pending' AND (scheduled_at IS NULL OR scheduled_at <= ?)
+		ORDER BY scheduled_at IS NULL DESC, scheduled_at ASC, priority DESC, created_at ASC
 		LIMIT 1
 	`
 
 	var env jobs.Envelope
 	var payload []byte
-	err = tx.QueryRowContext(ctx, query).Scan(
+	var scheduledAt sql.NullTime
+	err = tx.QueryRowContext(ctx, query, time.Now()).Scan(
 		&env.ID,
 		&env.Type,
 		&payload,
@@ -180,6 +199,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		&env.Attempts,
 		&env.MaxRetries,
 		&env.CreatedAt,
+		&scheduledAt,
 	)
 
 	if err == sql.ErrNoRows {
@@ -191,6 +211,10 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 
 	env.Payload = make([]byte, len(payload))
 	copy(env.Payload, payload)
+
+	if scheduledAt.Valid {
+		env.ScheduledAt = &scheduledAt.Time
+	}
 
 	updateQuery := `UPDATE jobs SET status = 'processing', updated_at = ? WHERE id = ?`
 	_, err = tx.ExecContext(ctx, updateQuery, time.Now(), env.ID)
@@ -243,7 +267,7 @@ func (q *SQLiteQueue) RequeueJob(ctx context.Context, env *jobs.Envelope) error 
 // GetJob retrieves a job by ID
 func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord, bool) {
 	query := `
-		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at
 		FROM jobs
 		WHERE id = ?
 	`
@@ -253,6 +277,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 	var payload []byte
 	var processedAt sql.NullTime
 	var lastError sql.NullString
+	var scheduledAt sql.NullTime
 
 	err := q.db.QueryRowContext(ctx, query, jobID).Scan(
 		&record.ID,
@@ -265,6 +290,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 		&lastError,
 		&record.CreatedAt,
 		&processedAt,
+		&scheduledAt,
 	)
 
 	if err != nil {
@@ -282,13 +308,17 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 		record.LastError = lastError.String
 	}
 
+	if scheduledAt.Valid {
+		record.ScheduledAt = &scheduledAt.Time
+	}
+
 	return &record, true
 }
 
 // ListJobsByStatus returns all jobs with a given status
 func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*JobRecord {
 	query := `
-		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at
 		FROM jobs
 		WHERE status = ?
 		ORDER BY priority DESC, created_at DESC
@@ -311,6 +341,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 		var payload []byte
 		var processedAt sql.NullTime
 		var lastError sql.NullString
+		var scheduledAt sql.NullTime
 
 		err := rows.Scan(
 			&record.ID,
@@ -323,6 +354,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 			&lastError,
 			&record.CreatedAt,
 			&processedAt,
+			&scheduledAt,
 		)
 
 		if err != nil {
@@ -338,6 +370,10 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 
 		if lastError.Valid {
 			record.LastError = lastError.String
+		}
+
+		if scheduledAt.Valid {
+			record.ScheduledAt = &scheduledAt.Time
 		}
 
 		records = append(records, &record)
@@ -365,7 +401,6 @@ func (q *SQLiteQueue) ListDLQJobs(ctx context.Context) []*JobRecord {
 
 // RequeueDLQJob moves a job from DLQ back to pending status
 func (q *SQLiteQueue) RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error {
-	// First verify the job is in DLQ
 	record, exists := q.GetJob(ctx, jobID)
 	if !exists {
 		return fmt.Errorf("job not found: %s", jobID)
@@ -375,7 +410,6 @@ func (q *SQLiteQueue) RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error
 		return fmt.Errorf("job is not in DLQ")
 	}
 
-	// Reset attempts and move back to pending
 	query := `
 		UPDATE jobs
 		SET status = 'pending', attempts = 0, last_error = NULL, updated_at = ?

@@ -32,7 +32,7 @@ PORT=3000 go run ./cmd/server
 
 - `GET /` - Hello World
 - `GET /health` - Health check
-- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority`)
+- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority` and `scheduled_at`)
 - `GET /jobs/{id}` - Get job status by ID
 - `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed`)
 
@@ -113,6 +113,88 @@ When multiple jobs are queued, they will be processed in order:
 2. Priority 5 jobs (FIFO within priority)
 3. Priority 0 jobs (FIFO within priority)
 4. Priority -5 jobs (FIFO within priority)
+
+## Scheduled Jobs
+
+Jobs can be scheduled to run at a specific time in the future using the `scheduled_at` field. Jobs will not be processed until their scheduled time arrives.
+
+- **Immediate jobs**: Omit `scheduled_at` or set to `null` (processed immediately)
+- **Scheduled jobs**: Set `scheduled_at` to an RFC3339 timestamp (e.g., `2025-12-31T15:30:00Z`)
+- **Processing order**: Immediate jobs are always processed before scheduled jobs
+- Within scheduled jobs: ordered by scheduled time, then priority
+
+### Scheduled Job Examples
+
+```bash
+# Schedule a job for 5 minutes from now
+SCHEDULED_TIME=$(date -u -d '+5 minutes' +"%Y-%m-%dT%H:%M:%SZ")
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"echo\",
+    \"payload\": {\"message\": \"This runs in 5 minutes\"},
+    \"scheduled_at\": \"$SCHEDULED_TIME\"
+  }"
+
+# Schedule a specific timestamp (New Year 2026)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "Happy New Year 2026!"},
+    "scheduled_at": "2026-01-01T00:00:00Z"
+  }'
+
+# Schedule with priority (high-priority job in 10 minutes)
+SCHEDULED_TIME=$(date -u -d '+10 minutes' +"%Y-%m-%dT%H:%M:%SZ")
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"echo\",
+    \"payload\": {\"message\": \"Important scheduled task\"},
+    \"scheduled_at\": \"$SCHEDULED_TIME\",
+    \"priority\": 10
+  }"
+
+# Immediate job (will be processed before any scheduled jobs)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "Process immediately"}
+  }'
+```
+
+**Manual Testing Example:**
+
+```bash
+# Terminal 1: Start the server
+go run ./cmd/server
+
+# Terminal 2: Schedule a job for 30 seconds from now
+SCHEDULED_TIME=$(date -u -d '+30 seconds' +"%Y-%m-%dT%H:%M:%SZ")
+RESPONSE=$(curl -s -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d "{
+    \"type\": \"echo\",
+    \"payload\": {\"message\": \"Delayed job test\"},
+    \"scheduled_at\": \"$SCHEDULED_TIME\"
+  }")
+
+echo "Scheduled job: $RESPONSE"
+JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
+
+# Check status immediately (should be pending)
+curl -s http://localhost:8080/jobs/$JOB_ID | jq '.Status'
+# Output: "pending"
+
+# Wait 30+ seconds, then check again (should be completed)
+sleep 35
+curl -s http://localhost:8080/jobs/$JOB_ID | jq '.Status'
+# Output: "completed"
+```
+
+Jobs scheduled in the past are processed immediately. Scheduled jobs persist across server restarts.
 
 ## Retry Logic
 
