@@ -53,6 +53,18 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 func (s *Server) HandleGetJob(w http.ResponseWriter, r *http.Request) {
 	jobID := jobs.JobID(r.PathValue("id"))
 
+	if persQueue, ok := s.Queue.(queue.PersistentQueue); ok {
+		record, exists := persQueue.GetJob(r.Context(), jobID)
+		if !exists {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(record)
+		return
+	}
+
 	info, exists := s.Tracker.Get(jobID)
 	if !exists {
 		http.Error(w, "job not found", http.StatusNotFound)
@@ -65,6 +77,23 @@ func (s *Server) HandleGetJob(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) HandleListJobs(w http.ResponseWriter, r *http.Request) {
 	statusFilter := r.URL.Query().Get("status")
+
+	if persQueue, ok := s.Queue.(queue.PersistentQueue); ok {
+		var jobList []*queue.JobRecord
+		if statusFilter != "" {
+			jobList = persQueue.ListJobsByStatus(r.Context(), statusFilter)
+		} else {
+			allJobs := []*queue.JobRecord{}
+			for _, status := range []string{"pending", "processing", "completed", "failed"} {
+				allJobs = append(allJobs, persQueue.ListJobsByStatus(r.Context(), status)...)
+			}
+			jobList = allJobs
+		}
+
+		w.WriteHeader(http.StatusOK)
+		json.NewEncoder(w).Encode(jobList)
+		return
+	}
 
 	var jobList []*tracking.JobInfo
 	if statusFilter != "" {
