@@ -45,7 +45,6 @@ func TestScheduled_EndToEnd(t *testing.T) {
 		dispatcher.Stop()
 	})
 
-	// Test 1: Job scheduled in the future should not be processed immediately
 	t.Run("job scheduled in future not processed immediately", func(t *testing.T) {
 		payload := json.RawMessage(`{"test":"future"}`)
 		futureEnv, err := jobs.NewEnvelope("scheduled-job", payload)
@@ -86,7 +85,6 @@ func TestScheduled_EndToEnd(t *testing.T) {
 		}
 	})
 
-	// Test 2: Immediate job (nil ScheduledAt) should be processed right away
 	t.Run("immediate job processed immediately", func(t *testing.T) {
 		payload := json.RawMessage(`{"test":"immediate"}`)
 		immediateEnv, err := jobs.NewEnvelope("scheduled-job", payload)
@@ -113,9 +111,7 @@ func TestScheduled_EndToEnd(t *testing.T) {
 		}
 	})
 
-	// Test 3: Immediate job should be processed before future job
 	t.Run("immediate job processed before future job", func(t *testing.T) {
-		// Enqueue a job scheduled 150ms in the future
 		futurePayload := json.RawMessage(`{"test":"future2"}`)
 		futureEnv2, err := jobs.NewEnvelope("scheduled-job", futurePayload)
 		if err != nil {
@@ -166,7 +162,6 @@ func TestScheduled_EndToEnd(t *testing.T) {
 		}
 	})
 
-	// Test 4: Job scheduled in the past should be processed immediately
 	t.Run("job scheduled in past processed immediately", func(t *testing.T) {
 		payload := json.RawMessage(`{"test":"past"}`)
 		pastEnv, err := jobs.NewEnvelope("scheduled-job", payload)
