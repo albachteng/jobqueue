@@ -117,10 +117,27 @@ func (q *SQLiteQueue) applyMigrations() error {
 	}
 
 	if !scheduledAtExists {
-		// Add scheduled_at column (NULL by default, meaning immediate execution)
 		_, err := q.db.Exec(`ALTER TABLE jobs ADD COLUMN scheduled_at TIMESTAMP`)
 		if err != nil {
 			return fmt.Errorf("failed to add scheduled_at column: %w", err)
+		}
+	}
+
+	var timeoutExists bool
+	err = q.db.QueryRow(`
+		SELECT COUNT(*) > 0
+		FROM pragma_table_info('jobs')
+		WHERE name = 'timeout'
+	`).Scan(&timeoutExists)
+
+	if err != nil {
+		return fmt.Errorf("failed to check for timeout column: %w", err)
+	}
+
+	if !timeoutExists {
+		_, err := q.db.Exec(`ALTER TABLE jobs ADD COLUMN timeout INTEGER NOT NULL DEFAULT 0`)
+		if err != nil {
+			return fmt.Errorf("failed to add timeout column: %w", err)
 		}
 	}
 
@@ -141,8 +158,8 @@ func (q *SQLiteQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
 	}
 
 	query := `
-		INSERT INTO jobs (id, type, payload, status, priority, attempts, max_retries, created_at, updated_at, scheduled_at)
-		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?)
+		INSERT INTO jobs (id, type, payload, status, priority, attempts, max_retries, created_at, updated_at, scheduled_at, timeout)
+		VALUES (?, ?, ?, 'pending', ?, ?, ?, ?, ?, ?, ?)
 	`
 
 	_, err := q.db.ExecContext(ctx, query,
@@ -155,6 +172,7 @@ func (q *SQLiteQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
 		env.CreatedAt,
 		time.Now(),
 		env.ScheduledAt,
+		int64(env.Timeout),
 	)
 
 	return err
@@ -181,7 +199,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 	// Find highest priority pending job that's ready to run
 	// Immediate jobs (NULL scheduled_at) come first, then by scheduled time, then priority
 	query := `
-		SELECT id, type, payload, priority, attempts, max_retries, created_at, scheduled_at
+		SELECT id, type, payload, priority, attempts, max_retries, created_at, scheduled_at, timeout
 		FROM jobs
 		WHERE status = 'pending' AND (scheduled_at IS NULL OR scheduled_at <= ?)
 		ORDER BY scheduled_at IS NULL DESC, scheduled_at ASC, priority DESC, created_at ASC
@@ -191,6 +209,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 	var env jobs.Envelope
 	var payload []byte
 	var scheduledAt sql.NullTime
+	var timeoutNs int64
 	err = tx.QueryRowContext(ctx, query, time.Now()).Scan(
 		&env.ID,
 		&env.Type,
@@ -200,6 +219,7 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 		&env.MaxRetries,
 		&env.CreatedAt,
 		&scheduledAt,
+		&timeoutNs,
 	)
 
 	if err == sql.ErrNoRows {
@@ -215,6 +235,8 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 	if scheduledAt.Valid {
 		env.ScheduledAt = &scheduledAt.Time
 	}
+
+	env.Timeout = time.Duration(timeoutNs)
 
 	updateQuery := `UPDATE jobs SET status = 'processing', updated_at = ? WHERE id = ?`
 	_, err = tx.ExecContext(ctx, updateQuery, time.Now(), env.ID)
@@ -257,17 +279,17 @@ func (q *SQLiteQueue) FailJob(ctx context.Context, jobID jobs.JobID, errorMsg st
 func (q *SQLiteQueue) RequeueJob(ctx context.Context, env *jobs.Envelope) error {
 	query := `
 		UPDATE jobs
-		SET status = 'pending', attempts = ?, priority = ?, updated_at = ?
+		SET status = 'pending', attempts = ?, priority = ?, timeout = ?, updated_at = ?
 		WHERE id = ?
 	`
-	_, err := q.db.ExecContext(ctx, query, env.Attempts, env.Priority, time.Now(), env.ID)
+	_, err := q.db.ExecContext(ctx, query, env.Attempts, env.Priority, int64(env.Timeout), time.Now(), env.ID)
 	return err
 }
 
 // GetJob retrieves a job by ID
 func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord, bool) {
 	query := `
-		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at, timeout
 		FROM jobs
 		WHERE id = ?
 	`
@@ -278,6 +300,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 	var processedAt sql.NullTime
 	var lastError sql.NullString
 	var scheduledAt sql.NullTime
+	var timeoutNs int64
 
 	err := q.db.QueryRowContext(ctx, query, jobID).Scan(
 		&record.ID,
@@ -291,6 +314,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 		&record.CreatedAt,
 		&processedAt,
 		&scheduledAt,
+		&timeoutNs,
 	)
 
 	if err != nil {
@@ -311,6 +335,8 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 	if scheduledAt.Valid {
 		record.ScheduledAt = &scheduledAt.Time
 	}
+
+	record.Timeout = time.Duration(timeoutNs)
 
 	return &record, true
 }

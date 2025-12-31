@@ -867,15 +867,15 @@ func TestWorker_TimeoutEnforcement(t *testing.T) {
 		registry.Register("timeout", handler)
 
 		mockQueue := &mockPersistentQueue{
-			enqueueFunc: func(ctx context.Context, env *jobs.Envelope) error {
+			moveToDLQFunc: func(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
 				mu.Lock()
-				capturedError = errors.New("placeholder")
+				capturedError = errors.New(errorMsg)
 				mu.Unlock()
 				return nil
 			},
 		}
 
-		worker := NewWorker(registry, mockQueue, nil)
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
 		var wg sync.WaitGroup
 		wg.Add(1)
 
@@ -901,8 +901,8 @@ func TestWorker_TimeoutEnforcement(t *testing.T) {
 			t.Fatal("expected timeout error to be captured")
 		}
 
-		if !errors.Is(capturedError, context.DeadlineExceeded) {
-			t.Errorf("expected context.DeadlineExceeded, got: %v", capturedError)
+		if capturedError.Error() != "context deadline exceeded" {
+			t.Errorf("expected 'context deadline exceeded', got: %v", capturedError)
 		}
 	})
 }
@@ -928,7 +928,7 @@ func TestWorker_TimeoutWithRetries(t *testing.T) {
 
 		requeuedJobs := []*jobs.Envelope{}
 		mockQueue := &mockPersistentQueue{
-			enqueueFunc: func(ctx context.Context, env *jobs.Envelope) error {
+			requeueJobFunc: func(ctx context.Context, env *jobs.Envelope) error {
 				mu.Lock()
 				requeuedJobs = append(requeuedJobs, env)
 				mu.Unlock()
@@ -936,7 +936,7 @@ func TestWorker_TimeoutWithRetries(t *testing.T) {
 			},
 		}
 
-		worker := NewWorker(registry, mockQueue, nil)
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
 		var wg sync.WaitGroup
 		wg.Add(1)
 
@@ -1000,7 +1000,7 @@ func TestWorker_TimeoutWithRetries(t *testing.T) {
 			},
 		}
 
-		worker := NewWorker(registry, mockQueue, nil)
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
 		var wg sync.WaitGroup
 		wg.Add(1)
 

@@ -62,7 +62,11 @@ func TestTimeout_EndToEnd(t *testing.T) {
 		jobID := env.ID
 		t.Logf("Enqueued timeout job %s with 50ms timeout", jobID)
 
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(1 * time.Second)
+
+		cancel()
+		dispatcher.Stop()
+		time.Sleep(100 * time.Millisecond)
 
 		totalAttempts := attempts.Load()
 		if totalAttempts < 1 {
@@ -74,10 +78,6 @@ func TestTimeout_EndToEnd(t *testing.T) {
 		}
 
 		t.Logf("Job attempted %d times", totalAttempts)
-
-		cancel()
-		dispatcher.Stop()
-		time.Sleep(100 * time.Millisecond)
 
 		record, exists := persQueue.GetJob(context.Background(), jobID)
 		if !exists {
