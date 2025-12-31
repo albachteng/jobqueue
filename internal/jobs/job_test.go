@@ -389,3 +389,75 @@ func TestEnvelope_ScheduledAt(t *testing.T) {
 		}
 	})
 }
+
+func TestEnvelope_Timeout(t *testing.T) {
+	t.Run("serializes timeout correctly", func(t *testing.T) {
+		payload := EchoPayload{Message: "with timeout"}
+		envelope, _ := NewEnvelope("echo", payload)
+
+		timeout := 5 * time.Second
+		envelope.Timeout = timeout
+
+		jsonBytes, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("failed to marshal envelope: %v", err)
+		}
+
+		var decoded Envelope
+		if err := json.Unmarshal(jsonBytes, &decoded); err != nil {
+			t.Fatalf("failed to unmarshal envelope: %v", err)
+		}
+
+		if decoded.Timeout != timeout {
+			t.Errorf("timeout mismatch: got %v, want %v", decoded.Timeout, timeout)
+		}
+	})
+
+	t.Run("handles zero timeout (no limit)", func(t *testing.T) {
+		payload := EchoPayload{Message: "no timeout"}
+		envelope, _ := NewEnvelope("echo", payload)
+
+		if envelope.Timeout != 0 {
+			t.Errorf("new envelope should have zero timeout, got %v", envelope.Timeout)
+		}
+
+		jsonBytes, err := json.Marshal(envelope)
+		if err != nil {
+			t.Fatalf("failed to marshal envelope: %v", err)
+		}
+
+		var decoded Envelope
+		if err := json.Unmarshal(jsonBytes, &decoded); err != nil {
+			t.Fatalf("failed to unmarshal envelope: %v", err)
+		}
+
+		if decoded.Timeout != 0 {
+			t.Errorf("decoded envelope should have zero timeout, got %v", decoded.Timeout)
+		}
+	})
+
+	t.Run("round-trip preserves timeout value", func(t *testing.T) {
+		original := &Envelope{
+			ID:        "timeout-test",
+			Type:      "test",
+			Payload:   json.RawMessage(`{"data":"value"}`),
+			CreatedAt: time.Now().Truncate(time.Second),
+			Status:    "pending",
+			Timeout:   30 * time.Second,
+		}
+
+		data, err := json.Marshal(original)
+		if err != nil {
+			t.Fatalf("marshal failed: %v", err)
+		}
+
+		var decoded Envelope
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("unmarshal failed: %v", err)
+		}
+
+		if decoded.Timeout != original.Timeout {
+			t.Errorf("timeout mismatch: expected %v, got %v", original.Timeout, decoded.Timeout)
+		}
+	})
+}
