@@ -70,7 +70,17 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 			w.tracker.MarkProcessing(envelope.ID)
 		}
 
-		err := w.registry.Handle(ctx, envelope)
+		jobCtx := ctx
+		var cancel context.CancelFunc
+		if envelope.Timeout > 0 {
+			jobCtx, cancel = context.WithTimeout(ctx, envelope.Timeout)
+		}
+
+		err := w.registry.Handle(jobCtx, envelope)
+
+		if cancel != nil {
+			cancel()
+		}
 
 		if err == nil {
 			if w.persQueue != nil {

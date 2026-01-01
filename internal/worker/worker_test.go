@@ -694,6 +694,7 @@ func TestWorker_DLQPreservesErrorContext(t *testing.T) {
 
 // Mock persistent queue for testing DLQ
 type mockPersistentQueue struct {
+	enqueueFunc     func(ctx context.Context, env *jobs.Envelope) error
 	completeJobFunc func(ctx context.Context, jobID jobs.JobID) error
 	failJobFunc     func(ctx context.Context, jobID jobs.JobID, errorMsg string) error
 	requeueJobFunc  func(ctx context.Context, env *jobs.Envelope) error
@@ -701,6 +702,9 @@ type mockPersistentQueue struct {
 }
 
 func (m *mockPersistentQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
+	if m.enqueueFunc != nil {
+		return m.enqueueFunc(ctx, env)
+	}
 	return nil
 }
 
@@ -754,4 +758,283 @@ func (m *mockPersistentQueue) ListJobsByStatus(ctx context.Context, status strin
 
 func (m *mockPersistentQueue) Close() error {
 	return nil
+}
+
+func TestWorker_TimeoutEnforcement(t *testing.T) {
+	t.Run("cancels job that exceeds timeout", func(t *testing.T) {
+		ctx := context.Background()
+		jobChan := make(chan *jobs.Envelope, 1)
+		registry := jobs.NewRegistry()
+
+		jobStarted := make(chan struct{})
+		jobCancelled := make(chan struct{})
+
+		handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			close(jobStarted)
+			<-ctx.Done()
+			close(jobCancelled)
+			return ctx.Err()
+		})
+
+		registry.Register("slow", handler)
+
+		worker := NewWorker(registry, nil, nil)
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			worker.Start(ctx, jobChan)
+		}()
+
+		envelope := &jobs.Envelope{
+			ID:      "timeout-job",
+			Type:    "slow",
+			Timeout: 50 * time.Millisecond,
+		}
+		jobChan <- envelope
+		close(jobChan)
+
+		select {
+		case <-jobStarted:
+		case <-time.After(1 * time.Second):
+			t.Fatal("job did not start")
+		}
+
+		select {
+		case <-jobCancelled:
+		case <-time.After(200 * time.Millisecond):
+			t.Fatal("job was not cancelled after timeout")
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("allows job without timeout to run indefinitely", func(t *testing.T) {
+		ctx := context.Background()
+		jobChan := make(chan *jobs.Envelope, 1)
+		registry := jobs.NewRegistry()
+
+		jobCompleted := make(chan struct{})
+
+		handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			time.Sleep(100 * time.Millisecond)
+			close(jobCompleted)
+			return nil
+		})
+
+		registry.Register("slow", handler)
+
+		worker := NewWorker(registry, nil, nil)
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			worker.Start(ctx, jobChan)
+		}()
+
+		envelope := &jobs.Envelope{
+			ID:      "no-timeout-job",
+			Type:    "slow",
+			Timeout: 0,
+		}
+		jobChan <- envelope
+		close(jobChan)
+
+		select {
+		case <-jobCompleted:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatal("job should have completed without timeout")
+		}
+
+		wg.Wait()
+	})
+
+	t.Run("timeout error is distinguishable from regular errors", func(t *testing.T) {
+		ctx := context.Background()
+		jobChan := make(chan *jobs.Envelope, 1)
+		registry := jobs.NewRegistry()
+
+		var capturedError error
+		var mu sync.Mutex
+
+		handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+		registry.Register("timeout", handler)
+
+		mockQueue := &mockPersistentQueue{
+			moveToDLQFunc: func(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
+				mu.Lock()
+				capturedError = errors.New(errorMsg)
+				mu.Unlock()
+				return nil
+			},
+		}
+
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			worker.Start(ctx, jobChan)
+		}()
+
+		envelope := &jobs.Envelope{
+			ID:      "timeout-check",
+			Type:    "timeout",
+			Timeout: 10 * time.Millisecond,
+		}
+		jobChan <- envelope
+		close(jobChan)
+
+		wg.Wait()
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if capturedError == nil {
+			t.Fatal("expected timeout error to be captured")
+		}
+
+		if capturedError.Error() != "context deadline exceeded" {
+			t.Errorf("expected 'context deadline exceeded', got: %v", capturedError)
+		}
+	})
+}
+
+func TestWorker_TimeoutWithRetries(t *testing.T) {
+	t.Run("timed out job goes through retry logic", func(t *testing.T) {
+		ctx := context.Background()
+		jobChan := make(chan *jobs.Envelope, 1)
+		registry := jobs.NewRegistry()
+
+		attemptCount := 0
+		var mu sync.Mutex
+
+		handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			mu.Lock()
+			attemptCount++
+			mu.Unlock()
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+		registry.Register("timeout", handler)
+
+		requeuedJobs := []*jobs.Envelope{}
+		mockQueue := &mockPersistentQueue{
+			requeueJobFunc: func(ctx context.Context, env *jobs.Envelope) error {
+				mu.Lock()
+				requeuedJobs = append(requeuedJobs, env)
+				mu.Unlock()
+				return nil
+			},
+		}
+
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			worker.Start(ctx, jobChan)
+		}()
+
+		envelope := &jobs.Envelope{
+			ID:         "retry-timeout",
+			Type:       "timeout",
+			Timeout:    10 * time.Millisecond,
+			MaxRetries: 2,
+			Attempts:   0,
+		}
+		jobChan <- envelope
+		close(jobChan)
+
+		time.Sleep(100 * time.Millisecond)
+		wg.Wait()
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if attemptCount != 1 {
+			t.Errorf("expected 1 attempt, got %d", attemptCount)
+		}
+
+		if len(requeuedJobs) == 0 {
+			t.Fatal("expected job to be requeued after timeout")
+		}
+
+		if requeuedJobs[0].Attempts != 1 {
+			t.Errorf("expected attempts=1 after requeue, got %d", requeuedJobs[0].Attempts)
+		}
+	})
+
+	t.Run("timed out job moves to DLQ after max retries", func(t *testing.T) {
+		ctx := context.Background()
+		jobChan := make(chan *jobs.Envelope, 1)
+		registry := jobs.NewRegistry()
+
+		handler := jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			<-ctx.Done()
+			return ctx.Err()
+		})
+
+		registry.Register("timeout", handler)
+
+		var dlqJobID jobs.JobID
+		var dlqError string
+		var mu sync.Mutex
+
+		mockQueue := &mockPersistentQueue{
+			moveToDLQFunc: func(ctx context.Context, env *jobs.Envelope, errorMsg string) error {
+				mu.Lock()
+				dlqJobID = env.ID
+				dlqError = errorMsg
+				mu.Unlock()
+				return nil
+			},
+		}
+
+		worker := NewWorkerWithPersistence(registry, mockQueue, nil)
+		var wg sync.WaitGroup
+		wg.Add(1)
+
+		go func() {
+			defer wg.Done()
+			worker.Start(ctx, jobChan)
+		}()
+
+		envelope := &jobs.Envelope{
+			ID:         "dlq-timeout",
+			Type:       "timeout",
+			Timeout:    10 * time.Millisecond,
+			MaxRetries: 0,
+			Attempts:   0,
+		}
+		jobChan <- envelope
+		close(jobChan)
+
+		time.Sleep(100 * time.Millisecond)
+		wg.Wait()
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if dlqJobID != envelope.ID {
+			t.Errorf("expected job %s in DLQ, got %s", envelope.ID, dlqJobID)
+		}
+
+		if dlqError == "" {
+			t.Error("expected DLQ error message to be set")
+		}
+
+		if !strings.Contains(dlqError, "deadline") && !strings.Contains(dlqError, "timeout") {
+			t.Errorf("expected timeout-related error, got: %s", dlqError)
+		}
+	})
 }
