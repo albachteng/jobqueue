@@ -28,6 +28,7 @@ type Envelope struct {
 	MaxRetries  int             `json:"max_retries,omitempty"`
 	Attempts    int             `json:"attempts,omitempty"`
 	ScheduledAt *time.Time      `json:"scheduled_at,omitempty"`
+	Timeout     time.Duration   `json:"timeout,omitempty"`
 }
 
 func NewEnvelope(jobType JobType, payload any) (*Envelope, error) {
