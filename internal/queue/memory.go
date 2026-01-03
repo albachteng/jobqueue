@@ -6,7 +6,11 @@ import (
 	"sync"
 )
 
-var ErrEmptyQueue = errors.New("queue is empty")
+var (
+	ErrEmptyQueue        = errors.New("queue is empty")
+	ErrJobNotFound       = errors.New("job not found")
+	ErrJobNotCancellable = errors.New("job cannot be cancelled in current state")
+)
 
 type InMemoryQueue[T any] struct {
 	mu    sync.Mutex
