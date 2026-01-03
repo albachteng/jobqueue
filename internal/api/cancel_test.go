@@ -20,7 +20,15 @@ func TestHandleCancelJob(t *testing.T) {
 			return nil
 		}))
 
+		dbPath := t.TempDir() + "/cancel_test.db"
+		persQueue, err := queue.NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer persQueue.Close()
+
 		srv := NewServer(registry, slog.Default())
+		srv.Queue = persQueue
 
 		// Enqueue a job first
 		reqBody := EnqueueRequest{
@@ -65,7 +73,16 @@ func TestHandleCancelJob(t *testing.T) {
 
 	t.Run("returns 404 for non-existent job", func(t *testing.T) {
 		registry := jobs.NewRegistry()
+
+		dbPath := t.TempDir() + "/cancel_404.db"
+		persQueue, err := queue.NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
+		}
+		defer persQueue.Close()
+
 		srv := NewServer(registry, slog.Default())
+		srv.Queue = persQueue
 
 		cancelReq := httptest.NewRequest(http.MethodDelete, "/jobs/non-existent-id", nil)
 		cancelReq.SetPathValue("id", "non-existent-id")
@@ -80,16 +97,28 @@ func TestHandleCancelJob(t *testing.T) {
 
 	t.Run("returns 400 when cancelling completed job", func(t *testing.T) {
 		registry := jobs.NewRegistry()
-		srv := NewServer(registry, slog.Default())
+		registry.MustRegister("echo", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			return nil
+		}))
 
-		// Create a mock persistent queue
-		mockQueue := &mockCancellableQueue{
-			cancelErr: queue.ErrJobNotCancellable,
+		dbPath := t.TempDir() + "/cancel_completed.db"
+		persQueue, err := queue.NewSQLiteQueue(dbPath)
+		if err != nil {
+			t.Fatalf("failed to create queue: %v", err)
 		}
-		srv.Queue = mockQueue
+		defer persQueue.Close()
 
-		cancelReq := httptest.NewRequest(http.MethodDelete, "/jobs/some-job-id", nil)
-		cancelReq.SetPathValue("id", "some-job-id")
+		srv := NewServer(registry, slog.Default())
+		srv.Queue = persQueue
+
+		// Enqueue and complete a job
+		ctx := context.Background()
+		env, _ := jobs.NewEnvelope("echo", json.RawMessage(`{}`))
+		persQueue.Enqueue(ctx, env)
+		persQueue.CompleteJob(ctx, env.ID)
+
+		cancelReq := httptest.NewRequest(http.MethodDelete, "/jobs/"+string(env.ID), nil)
+		cancelReq.SetPathValue("id", string(env.ID))
 		cancelW := httptest.NewRecorder()
 
 		srv.HandleCancelJob(cancelW, cancelReq)
@@ -115,21 +144,4 @@ func TestHandleCancelJob(t *testing.T) {
 			t.Errorf("got status %d, want %d", cancelW.Code, http.StatusNotImplemented)
 		}
 	})
-}
-
-type mockCancellableQueue struct {
-	queue.Queue[*jobs.Envelope]
-	cancelErr error
-}
-
-func (m *mockCancellableQueue) CancelJob(ctx context.Context, jobID jobs.JobID) error {
-	return m.cancelErr
-}
-
-func (m *mockCancellableQueue) Enqueue(ctx context.Context, env *jobs.Envelope) error {
-	return nil
-}
-
-func (m *mockCancellableQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
-	return nil, queue.ErrEmptyQueue
 }

@@ -93,7 +93,7 @@ func TestSQLiteQueue_CancelJob(t *testing.T) {
 		}
 	})
 
-	t.Run("cannot cancel processing job without context cancellation", func(t *testing.T) {
+	t.Run("cannot cancel processing job", func(t *testing.T) {
 		dbPath := t.TempDir() + "/cancel_processing.db"
 		q, err := NewSQLiteQueue(dbPath)
 		if err != nil {
@@ -123,18 +123,22 @@ func TestSQLiteQueue_CancelJob(t *testing.T) {
 			t.Errorf("expected processing status, got %s", record.Status)
 		}
 
-		// Cancel the processing job (marks for cancellation)
-		if err := q.CancelJob(ctx, env.ID); err != nil {
-			t.Fatalf("failed to cancel processing job: %v", err)
+		// Try to cancel the processing job
+		err = q.CancelJob(ctx, env.ID)
+		if err == nil {
+			t.Error("expected error when cancelling processing job")
+		}
+		if err != ErrJobNotCancellable {
+			t.Errorf("expected ErrJobNotCancellable, got: %v", err)
 		}
 
-		// Verify job is cancelled
+		// Verify job is still processing
 		record, exists = q.GetJob(ctx, env.ID)
 		if !exists {
-			t.Fatal("job not found after cancellation")
+			t.Fatal("job not found after cancel attempt")
 		}
-		if record.Status != "cancelled" {
-			t.Errorf("expected cancelled status, got %s", record.Status)
+		if record.Status != "processing" {
+			t.Errorf("expected processing status to remain, got %s", record.Status)
 		}
 	})
 

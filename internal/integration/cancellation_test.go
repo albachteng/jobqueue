@@ -83,19 +83,15 @@ func TestCancellation_EndToEnd(t *testing.T) {
 		t.Logf("Pending job successfully cancelled")
 	})
 
-	t.Run("cancel processing job interrupts execution", func(t *testing.T) {
+	t.Run("cannot cancel processing job", func(t *testing.T) {
 		var started atomic.Bool
-		var interrupted atomic.Bool
+		var completed atomic.Bool
 
-		registry.MustRegister("long-running-job", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+		registry.MustRegister("quick-job", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
 			started.Store(true)
-			select {
-			case <-ctx.Done():
-				interrupted.Store(true)
-				return ctx.Err()
-			case <-time.After(5 * time.Second):
-				return nil
-			}
+			time.Sleep(100 * time.Millisecond)
+			completed.Store(true)
+			return nil
 		}))
 
 		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
@@ -103,7 +99,7 @@ func TestCancellation_EndToEnd(t *testing.T) {
 		}))
 
 		dispatcher := worker.NewDispatcher(persQueue, 1, registry, nil, logger)
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
 		if err := dispatcher.Start(ctx); err != nil {
@@ -112,7 +108,7 @@ func TestCancellation_EndToEnd(t *testing.T) {
 		defer dispatcher.Stop()
 
 		payload := json.RawMessage(`{"test":"processing"}`)
-		env, err := jobs.NewEnvelope("long-running-job", payload)
+		env, err := jobs.NewEnvelope("quick-job", payload)
 		if err != nil {
 			t.Fatalf("failed to create envelope: %v", err)
 		}
@@ -122,7 +118,7 @@ func TestCancellation_EndToEnd(t *testing.T) {
 		}
 
 		jobID := env.ID
-		t.Logf("Enqueued long-running job %s", jobID)
+		t.Logf("Enqueued quick job %s", jobID)
 
 		// Wait for job to start processing
 		for i := 0; i < 50; i++ {
@@ -145,29 +141,32 @@ func TestCancellation_EndToEnd(t *testing.T) {
 			t.Errorf("expected processing status, got: %s", record.Status)
 		}
 
-		// Cancel the job while it's processing
-		if err := persQueue.CancelJob(ctx, jobID); err != nil {
-			t.Fatalf("failed to cancel job: %v", err)
+		// Try to cancel the job while it's processing
+		err = persQueue.CancelJob(ctx, jobID)
+		if err == nil {
+			t.Error("expected error when cancelling processing job")
+		}
+		if err != queue.ErrJobNotCancellable {
+			t.Errorf("expected ErrJobNotCancellable, got: %v", err)
 		}
 
-		// Wait a bit for cancellation to propagate
+		// Wait for job to complete
 		time.Sleep(200 * time.Millisecond)
 
-		// Verify job was interrupted
-		if !interrupted.Load() {
-			t.Error("job context should have been cancelled")
+		if !completed.Load() {
+			t.Error("job should have completed normally")
 		}
 
-		// Verify job is cancelled
+		// Verify job completed successfully
 		record, exists = persQueue.GetJob(ctx, jobID)
 		if !exists {
-			t.Fatal("job not found after cancellation")
+			t.Fatal("job not found after completion")
 		}
-		if record.Status != "cancelled" {
-			t.Errorf("expected cancelled status, got: %s", record.Status)
+		if record.Status != "completed" {
+			t.Errorf("expected completed status, got: %s", record.Status)
 		}
 
-		t.Logf("Processing job successfully cancelled and interrupted")
+		t.Logf("Processing job correctly rejected cancellation and completed normally")
 	})
 
 	t.Run("cancel completed job returns error", func(t *testing.T) {

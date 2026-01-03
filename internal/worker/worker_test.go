@@ -760,6 +760,10 @@ func (m *mockPersistentQueue) Close() error {
 	return nil
 }
 
+func (m *mockPersistentQueue) CancelJob(ctx context.Context, jobID jobs.JobID) error {
+	return nil
+}
+
 func TestWorker_TimeoutEnforcement(t *testing.T) {
 	t.Run("cancels job that exceeds timeout", func(t *testing.T) {
 		ctx := context.Background()
