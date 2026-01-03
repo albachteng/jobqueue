@@ -67,6 +67,7 @@ func main() {
 	mux.HandleFunc("POST /jobs", srv.HandleEnqueue)
 	mux.HandleFunc("GET /jobs/{id}", srv.HandleGetJob)
 	mux.HandleFunc("GET /jobs", srv.HandleListJobs)
+	mux.HandleFunc("DELETE /jobs/{id}", srv.HandleCancelJob)
 	mux.HandleFunc("GET /dlq", srv.HandleListDLQ)
 	mux.HandleFunc("POST /dlq/{id}/requeue", srv.HandleRequeueDLQ)
 

@@ -34,7 +34,8 @@ PORT=3000 go run ./cmd/server
 - `GET /health` - Health check
 - `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority` and `scheduled_at`)
 - `GET /jobs/{id}` - Get job status by ID
-- `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed`)
+- `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed|cancelled`)
+- `DELETE /jobs/{id}` - Cancel a pending job
 
 ### End-to-End Example
 
@@ -195,6 +196,38 @@ curl -s http://localhost:8080/jobs/$JOB_ID | jq '.Status'
 ```
 
 Jobs scheduled in the past are processed immediately. Scheduled jobs persist across server restarts.
+
+## Job Cancellation
+
+Jobs can be cancelled while they are in pending status (before they start processing). Once a job begins processing, it cannot be cancelled and will run to completion.
+
+### Cancellation Examples
+
+```bash
+# Enqueue a job
+RESPONSE=$(curl -s -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{"type": "echo", "payload": {"message": "test"}}')
+
+JOB_ID=$(echo $RESPONSE | jq -r '.job_id')
+
+# Cancel the job (only works if job is still pending)
+curl -X DELETE http://localhost:8080/jobs/$JOB_ID
+
+# Response: {"job_id":"abc123...","status":"cancelled"}
+
+# View cancelled jobs
+curl -s "http://localhost:8080/jobs?status=cancelled" | jq
+```
+
+**Cancellation Rules:**
+- ✅ **Pending jobs** - Can be cancelled
+- ❌ **Processing jobs** - Cannot be cancelled (already executing)
+- ❌ **Completed jobs** - Cannot be cancelled (already finished)
+- ❌ **Failed/DLQ jobs** - Cannot be cancelled (already in terminal state)
+- ❌ **Scheduled jobs** - Can be cancelled before their scheduled time (while still pending)
+
+Cancelled jobs are excluded from processing and can be queried with `?status=cancelled`.
 
 ## Retry Logic
 

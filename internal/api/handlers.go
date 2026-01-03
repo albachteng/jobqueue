@@ -142,6 +142,37 @@ func (s *Server) HandleRequeueDLQ(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+func (s *Server) HandleCancelJob(w http.ResponseWriter, r *http.Request) {
+	persQueue, ok := s.Queue.(queue.PersistentQueue)
+	if !ok {
+		http.Error(w, "cancellation not available in non-persistent mode", http.StatusNotImplemented)
+		return
+	}
+
+	jobID := jobs.JobID(r.PathValue("id"))
+
+	if err := persQueue.CancelJob(r.Context(), jobID); err != nil {
+		if err == queue.ErrJobNotFound {
+			http.Error(w, "job not found", http.StatusNotFound)
+			return
+		}
+		if err == queue.ErrJobNotCancellable {
+			http.Error(w, "job cannot be cancelled in current state", http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.Logger.Info("job cancelled", "job_id", jobID)
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "cancelled",
+		"job_id": string(jobID),
+	})
+}
+
 func HandleRoot(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprintf(w, "Hello, World!\n")
 }

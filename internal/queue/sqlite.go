@@ -445,6 +445,26 @@ func (q *SQLiteQueue) RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error
 	return err
 }
 
+// CancelJob marks a pending job as cancelled
+func (q *SQLiteQueue) CancelJob(ctx context.Context, jobID jobs.JobID) error {
+	record, exists := q.GetJob(ctx, jobID)
+	if !exists {
+		return ErrJobNotFound
+	}
+
+	if record.Status != "pending" {
+		return ErrJobNotCancellable
+	}
+
+	query := `
+		UPDATE jobs
+		SET status = 'cancelled', updated_at = ?
+		WHERE id = ?
+	`
+	_, err := q.db.ExecContext(ctx, query, time.Now(), jobID)
+	return err
+}
+
 // Close closes the database connection
 func (q *SQLiteQueue) Close() error {
 	return q.db.Close()

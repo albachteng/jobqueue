@@ -22,5 +22,6 @@ type PersistentQueue interface {
 	MoveToDLQ(ctx context.Context, env *jobs.Envelope, errorMsg string) error
 	ListDLQJobs(ctx context.Context) []*JobRecord
 	RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error
+	CancelJob(ctx context.Context, jobID jobs.JobID) error
 	Close() error
 }
