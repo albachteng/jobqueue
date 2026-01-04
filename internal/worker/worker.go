@@ -84,7 +84,7 @@ func (w *Worker) processWithRetry(ctx context.Context, envelope *jobs.Envelope) 
 
 		if err == nil {
 			if w.persQueue != nil {
-				if completeErr := w.persQueue.CompleteJob(ctx, envelope.ID); completeErr != nil {
+				if completeErr := w.persQueue.CompleteJob(ctx, envelope.ID, envelope.Attempts); completeErr != nil {
 					w.logger.Error("failed to mark job as completed in database",
 						"error", completeErr,
 						"job_id", envelope.ID)

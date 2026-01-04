@@ -12,6 +12,7 @@ type EnqueueRequest struct {
 	Payload     json.RawMessage `json:"payload"`
 	Priority    int             `json:"priority,omitempty"`
 	ScheduledAt *time.Time      `json:"scheduled_at,omitempty"`
+	MaxRetries  int             `json:"max_retries,omitempty"`
 }
 
 type EnqueueResponse struct {

@@ -115,7 +115,7 @@ func TestHandleCancelJob(t *testing.T) {
 		ctx := context.Background()
 		env, _ := jobs.NewEnvelope("echo", json.RawMessage(`{}`))
 		persQueue.Enqueue(ctx, env)
-		persQueue.CompleteJob(ctx, env.ID)
+		persQueue.CompleteJob(ctx, env.ID, 1)
 
 		cancelReq := httptest.NewRequest(http.MethodDelete, "/jobs/"+string(env.ID), nil)
 		cancelReq.SetPathValue("id", string(env.ID))

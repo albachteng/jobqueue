@@ -22,6 +22,11 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if req.MaxRetries < 0 {
+		http.Error(w, "max_retries cannot be negative", http.StatusBadRequest)
+		return
+	}
+
 	envelope, err := jobs.NewEnvelope(req.Type, req.Payload)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -30,6 +35,7 @@ func (s *Server) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 
 	envelope.Priority = req.Priority
 	envelope.ScheduledAt = req.ScheduledAt
+	envelope.MaxRetries = req.MaxRetries
 
 	s.Tracker.Register(envelope)
 

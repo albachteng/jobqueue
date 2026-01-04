@@ -252,14 +252,14 @@ func (q *SQLiteQueue) Dequeue(ctx context.Context) (*jobs.Envelope, error) {
 }
 
 // CompleteJob marks a job as completed
-func (q *SQLiteQueue) CompleteJob(ctx context.Context, jobID jobs.JobID) error {
+func (q *SQLiteQueue) CompleteJob(ctx context.Context, jobID jobs.JobID, attempts int) error {
 	query := `
 		UPDATE jobs
-		SET status = 'completed', updated_at = ?, processed_at = ?
+		SET status = 'completed', attempts = ?, updated_at = ?, processed_at = ?
 		WHERE id = ?
 	`
 	now := time.Now()
-	_, err := q.db.ExecContext(ctx, query, now, now, jobID)
+	_, err := q.db.ExecContext(ctx, query, attempts, now, now, jobID)
 	return err
 }
 

@@ -712,7 +712,7 @@ func (m *mockPersistentQueue) Dequeue(ctx context.Context) (*jobs.Envelope, erro
 	return nil, nil
 }
 
-func (m *mockPersistentQueue) CompleteJob(ctx context.Context, jobID jobs.JobID) error {
+func (m *mockPersistentQueue) CompleteJob(ctx context.Context, jobID jobs.JobID, attempts int) error {
 	if m.completeJobFunc != nil {
 		return m.completeJobFunc(ctx, jobID)
 	}
