@@ -279,10 +279,10 @@ func (q *SQLiteQueue) FailJob(ctx context.Context, jobID jobs.JobID, errorMsg st
 func (q *SQLiteQueue) RequeueJob(ctx context.Context, env *jobs.Envelope) error {
 	query := `
 		UPDATE jobs
-		SET status = 'pending', attempts = ?, priority = ?, timeout = ?, updated_at = ?
+		SET status = 'pending', attempts = ?, priority = ?, max_retries = ?, timeout = ?, updated_at = ?
 		WHERE id = ?
 	`
-	_, err := q.db.ExecContext(ctx, query, env.Attempts, env.Priority, int64(env.Timeout), time.Now(), env.ID)
+	_, err := q.db.ExecContext(ctx, query, env.Attempts, env.Priority, env.MaxRetries, int64(env.Timeout), time.Now(), env.ID)
 	return err
 }
 
