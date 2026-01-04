@@ -36,22 +36,6 @@ func pollJobStatus(t *testing.T, q queue.PersistentQueue, jobID jobs.JobID, expe
 	return nil
 }
 
-// pollAttempts polls until attempts counter reaches expected value or times out
-func pollAttempts(t *testing.T, counter *atomic.Int32, expected int32, timeout time.Duration) int32 {
-	t.Helper()
-	deadline := time.Now().Add(timeout)
-
-	for time.Now().Before(deadline) {
-		current := counter.Load()
-		if current == expected {
-			return current
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-
-	return counter.Load()
-}
-
 func TestMaxRetries_EndToEnd(t *testing.T) {
 	dbPath := t.TempDir() + "/maxretries_test.db"
 	persQueue, err := queue.NewSQLiteQueue(dbPath)
