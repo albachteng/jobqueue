@@ -70,7 +70,7 @@ func TestSQLiteQueue_CancelJob(t *testing.T) {
 		}
 
 		// Complete the job
-		if err := q.CompleteJob(ctx, env.ID); err != nil {
+		if err := q.CompleteJob(ctx, env.ID, 1); err != nil {
 			t.Fatalf("failed to complete job: %v", err)
 		}
 
