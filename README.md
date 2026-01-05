@@ -32,7 +32,7 @@ PORT=3000 go run ./cmd/server
 
 - `GET /` - Hello World
 - `GET /health` - Health check
-- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority` and `scheduled_at`)
+- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority`, `scheduled_at`, and `max_retries`)
 - `GET /jobs/{id}` - Get job status by ID
 - `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed|cancelled`)
 - `DELETE /jobs/{id}` - Cancel a pending job
@@ -233,7 +233,7 @@ Cancelled jobs are excluded from processing and can be queried with `?status=can
 
 The job queue supports automatic retries with exponential backoff for failed jobs:
 
-- **MaxRetries**: Maximum number of retries (default 0 = no retries)
+- **max_retries**: Maximum number of retries (default 0 = no retries) - configurable per job via API
 - **Attempts**: Tracks how many times the job has been attempted
 - **Backoff**: Exponential delay between retries (100ms base, 30s max)
   - Attempt 1: 100ms delay
@@ -241,9 +241,41 @@ The job queue supports automatic retries with exponential backoff for failed job
   - Attempt 3: 400ms delay
   - Attempt 8+: 30s delay (capped)
 
-Jobs are marked as `failed` only after exhausting all retries. The `Attempts` field in the job status shows how many times the job was attempted.
+Jobs are marked as `failed` and moved to the Dead Letter Queue (DLQ) only after exhausting all retries. The `Attempts` field in the job status shows how many times the job was attempted.
 
-**Note**: Currently, retry configuration is set in code when registering job handlers. Future versions will support setting `MaxRetries` via the API.
+### Retry Examples
+
+```bash
+# Job with no retries (fails immediately on error)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "fail fast"},
+    "max_retries": 0
+  }'
+
+# Job with 3 retries (attempts up to 4 times total)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "retry up to 3 times"},
+    "max_retries": 3
+  }'
+
+# Critical job with many retries
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "important task"},
+    "max_retries": 10,
+    "priority": 10
+  }'
+```
+
+**Note**: Different jobs can have different retry strategies. Combine with `priority` to ensure critical jobs are both retried more and processed first.
 
 ## Testing
 

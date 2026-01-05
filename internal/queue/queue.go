@@ -14,7 +14,7 @@ type Queue[T any] interface {
 // PersistentQueue extends Queue with persistence operations
 type PersistentQueue interface {
 	Queue[*jobs.Envelope]
-	CompleteJob(ctx context.Context, jobID jobs.JobID) error
+	CompleteJob(ctx context.Context, jobID jobs.JobID, attempts int) error
 	FailJob(ctx context.Context, jobID jobs.JobID, errorMsg string) error
 	RequeueJob(ctx context.Context, env *jobs.Envelope) error
 	GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord, bool)

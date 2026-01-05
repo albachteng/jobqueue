@@ -367,7 +367,7 @@ func TestSQLiteQueue_JobState(t *testing.T) {
 		q.Enqueue(ctx, env)
 
 		job, _ := q.Dequeue(ctx)
-		if err := q.CompleteJob(ctx, job.ID); err != nil {
+		if err := q.CompleteJob(ctx, job.ID, 1); err != nil {
 			t.Errorf("CompleteJob failed: %v", err)
 		}
 
@@ -518,7 +518,7 @@ func TestSQLiteQueue_ListJobs(t *testing.T) {
 		completed, _ := jobs.NewEnvelope("completed", []byte(`{}`))
 		q.Enqueue(ctx, completed)
 		job, _ := q.Dequeue(ctx)
-		q.CompleteJob(ctx, job.ID)
+		q.CompleteJob(ctx, job.ID, 1)
 
 		pendingJobs := q.ListJobsByStatus(ctx, "pending")
 		if len(pendingJobs) != 2 {
@@ -1000,7 +1000,7 @@ func TestSQLiteQueue_DeadLetterQueue(t *testing.T) {
 		q.Enqueue(ctx, env)
 
 		job, _ := q.Dequeue(ctx)
-		q.CompleteJob(ctx, job.ID)
+		q.CompleteJob(ctx, job.ID, 1)
 
 		err = q.RequeueDLQJob(ctx, job.ID)
 		if err == nil {
