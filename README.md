@@ -30,12 +30,22 @@ PORT=3000 go run ./cmd/server
 
 ## API Endpoints
 
+### Core Endpoints
 - `GET /` - Hello World
 - `GET /health` - Health check
-- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority` and `scheduled_at`)
+
+### Job Management
+- `POST /jobs` - Enqueue a job (JSON payload with `type`, `payload`, and optional `priority`, `scheduled_at`, `max_retries`, `timeout`)
 - `GET /jobs/{id}` - Get job status by ID
 - `GET /jobs` - List all jobs (optional `?status=pending|processing|completed|failed|cancelled`)
 - `DELETE /jobs/{id}` - Cancel a pending job
+
+### Cron Jobs
+- `POST /cron-jobs` - Create a recurring job schedule
+- `GET /cron-jobs` - List all cron jobs
+- `GET /cron-jobs/{id}` - Get a specific cron job
+- `PUT /cron-jobs/{id}` - Update a cron job
+- `DELETE /cron-jobs/{id}` - Delete a cron job
 
 ### End-to-End Example
 
@@ -241,9 +251,152 @@ The job queue supports automatic retries with exponential backoff for failed job
   - Attempt 3: 400ms delay
   - Attempt 8+: 30s delay (capped)
 
-Jobs are marked as `failed` only after exhausting all retries. The `Attempts` field in the job status shows how many times the job was attempted.
+Jobs are marked as `failed` and moved to the Dead Letter Queue (DLQ) only after exhausting all retries. The `Attempts` field in the job status shows how many times the job was attempted.
 
-**Note**: Currently, retry configuration is set in code when registering job handlers. Future versions will support setting `MaxRetries` via the API.
+### Retry Examples
+
+```bash
+# Job with no retries (fails immediately on error)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "fail fast"},
+    "max_retries": 0
+  }'
+
+# Job with 3 retries (attempts up to 4 times total)
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "retry up to 3 times"},
+    "max_retries": 3
+  }'
+
+# Critical job with many retries
+curl -X POST http://localhost:8080/jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "echo",
+    "payload": {"message": "important task"},
+    "max_retries": 10,
+    "priority": 10
+  }'
+```
+
+**Note**: Different jobs can have different retry strategies. Combine with `priority` to ensure critical jobs are both retried more and processed first.
+
+## Cron Jobs
+
+Schedule recurring jobs with cron expressions. Cron jobs automatically create job instances at scheduled times.
+
+### API Endpoints
+
+- `POST /cron-jobs` - Create a new cron job
+- `GET /cron-jobs` - List all cron jobs
+- `GET /cron-jobs/{id}` - Get a specific cron job
+- `PUT /cron-jobs/{id}` - Update a cron job
+- `DELETE /cron-jobs/{id}` - Delete a cron job
+
+### Creating Cron Jobs
+
+```bash
+# Run every 5 minutes
+curl -X POST http://localhost:8080/cron-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Periodic Task",
+    "cron_expr": "*/5 * * * *",
+    "job_type": "echo",
+    "payload": {"message": "Running scheduled job"},
+    "priority": 10,
+    "max_retries": 3,
+    "timeout": "30s",
+    "enabled": true
+  }'
+
+# Daily at midnight
+curl -X POST http://localhost:8080/cron-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Daily Backup",
+    "cron_expr": "0 0 * * *",
+    "job_type": "backup",
+    "payload": {"target": "/data"},
+    "enabled": true
+  }'
+
+# Every Monday at 9am
+curl -X POST http://localhost:8080/cron-jobs \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Weekly Report",
+    "cron_expr": "0 9 * * 1",
+    "job_type": "report",
+    "payload": {"type": "weekly"},
+    "enabled": true
+  }'
+```
+
+### Cron Expression Format
+
+Standard 5-field cron format (minute hour day month weekday):
+
+```
+* * * * *
+│ │ │ │ │
+│ │ │ │ └─── Weekday (0-6, 0=Sunday)
+│ │ │ └───── Month (1-12)
+│ │ └─────── Day of month (1-31)
+│ └───────── Hour (0-23)
+└─────────── Minute (0-59)
+```
+
+**Common expressions:**
+- `*/5 * * * *` - Every 5 minutes
+- `0 * * * *` - Every hour
+- `0 0 * * *` - Daily at midnight
+- `0 0 * * 0` - Weekly on Sunday
+- `0 9 * * 1-5` - Weekdays at 9am
+- `30 2 1 * *` - Monthly on 1st at 2:30am
+
+### Managing Cron Jobs
+
+```bash
+# List all cron jobs
+curl http://localhost:8080/cron-jobs | jq
+
+# Get specific cron job
+curl http://localhost:8080/cron-jobs/CRON_JOB_ID | jq
+
+# Update cron job (disable)
+curl -X PUT http://localhost:8080/cron-jobs/CRON_JOB_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": false
+  }'
+
+# Update cron schedule
+curl -X PUT http://localhost:8080/cron-jobs/CRON_JOB_ID \
+  -H "Content-Type: application/json" \
+  -d '{
+    "cron_expr": "*/10 * * * *",
+    "enabled": true
+  }'
+
+# Delete cron job
+curl -X DELETE http://localhost:8080/cron-jobs/CRON_JOB_ID
+```
+
+### Cron Job Behavior
+
+- **Automatic scheduling**: Jobs are created automatically when cron expressions trigger
+- **Disabled jobs**: Setting `enabled: false` prevents new job instances from being created
+- **Next/Last run tracking**: System tracks when each cron job last ran and when it will run next
+- **Job inheritance**: Created job instances inherit `priority`, `max_retries`, and `timeout` from the cron job
+- **Persistence**: Cron jobs persist across server restarts
+- **No overlap**: A single cron job definition can create multiple job instances
 
 ## Testing
 

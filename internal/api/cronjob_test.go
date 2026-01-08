@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/cron"
-	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/queue"
 )
 

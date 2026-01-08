@@ -2,7 +2,9 @@ package queue
 
 import (
 	"context"
+	"time"
 
+	"github.com/albachteng/jobqueue/internal/cron"
 	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
@@ -23,5 +25,13 @@ type PersistentQueue interface {
 	ListDLQJobs(ctx context.Context) []*JobRecord
 	RequeueDLQJob(ctx context.Context, jobID jobs.JobID) error
 	CancelJob(ctx context.Context, jobID jobs.JobID) error
+	CreateCronJob(ctx context.Context, cronJob *cron.CronJob) error
+	GetCronJob(ctx context.Context, id cron.CronJobID) (*cron.CronJob, bool)
+	ListCronJobs(ctx context.Context) []*cron.CronJob
+	ListEnabledCronJobs(ctx context.Context) []*cron.CronJob
+	UpdateCronJob(ctx context.Context, cronJob *cron.CronJob) error
+	DeleteCronJob(ctx context.Context, id cron.CronJobID) error
+	UpdateCronJobNextRun(ctx context.Context, id cron.CronJobID, nextRun time.Time) error
+	UpdateCronJobLastRun(ctx context.Context, id cron.CronJobID, lastRun time.Time) error
 	Close() error
 }

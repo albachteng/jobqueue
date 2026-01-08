@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/jobs"
-	"github.com/albachteng/jobqueue/internal/queue"
 )
 
 type mockQueue struct {
@@ -256,71 +255,3 @@ func TestScheduler(t *testing.T) {
 	})
 }
 
-func TestSchedulerIntegration(t *testing.T) {
-	dbPath := t.TempDir() + "/scheduler_integration_test.db"
-	q, err := queue.NewSQLiteQueue(dbPath)
-	if err != nil {
-		t.Fatalf("failed to create queue: %v", err)
-	}
-	defer q.Close()
-
-	ctx := context.Background()
-	payload := json.RawMessage(`{"message": "integration test"}`)
-
-	pastTime := time.Now().Add(-1 * time.Minute)
-	cronJob := &CronJob{
-		ID:         "integration-cron",
-		Name:       "Integration Test Cron",
-		CronExpr:   "*/5 * * * *",
-		JobType:    "echo",
-		Payload:    payload,
-		Priority:   10,
-		MaxRetries: 5,
-		Timeout:    60 * time.Second,
-		Enabled:    true,
-		NextRun:    &pastTime,
-		CreatedAt:  time.Now(),
-		UpdatedAt:  time.Now(),
-	}
-
-	err = q.CreateCronJob(ctx, cronJob)
-	if err != nil {
-		t.Fatalf("failed to create cron job: %v", err)
-	}
-
-	scheduler := NewScheduler(q, nil)
-
-	err = scheduler.ProcessDueJobs(ctx)
-	if err != nil {
-		t.Fatalf("expected no error, got %v", err)
-	}
-
-	updatedCronJob, exists := q.GetCronJob(ctx, "integration-cron")
-	if !exists {
-		t.Fatal("expected cron job to exist")
-	}
-
-	if updatedCronJob.NextRun == nil {
-		t.Error("expected next run to be set")
-	}
-
-	if updatedCronJob.LastRun == nil {
-		t.Error("expected last run to be set")
-	}
-
-	jobs := q.ListJobsByStatus(ctx, "pending")
-	if len(jobs) != 1 {
-		t.Fatalf("expected 1 pending job, got %d", len(jobs))
-	}
-
-	job := jobs[0]
-	if job.Type != "echo" {
-		t.Errorf("expected job type 'echo', got %q", job.Type)
-	}
-	if job.Priority != 10 {
-		t.Errorf("expected priority 10, got %d", job.Priority)
-	}
-	if job.MaxRetries != 5 {
-		t.Errorf("expected max retries 5, got %d", job.MaxRetries)
-	}
-}

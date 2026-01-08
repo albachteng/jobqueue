@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/albachteng/jobqueue/internal/cron"
-	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
 func TestCronJobStorage(t *testing.T) {

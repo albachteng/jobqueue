@@ -7,7 +7,9 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3"
+	cronparser "github.com/robfig/cron/v3"
 
+	"github.com/albachteng/jobqueue/internal/cron"
 	"github.com/albachteng/jobqueue/internal/jobs"
 )
 
@@ -79,6 +81,32 @@ func (q *SQLiteQueue) initSchema() error {
 
 	indexSchema := `CREATE INDEX IF NOT EXISTS idx_status_priority_created ON jobs(status, priority DESC, created_at ASC);`
 	if _, err := q.db.Exec(indexSchema); err != nil {
+		return err
+	}
+
+	cronSchema := `
+	CREATE TABLE IF NOT EXISTS cron_jobs (
+		id TEXT PRIMARY KEY,
+		name TEXT NOT NULL,
+		cron_expr TEXT NOT NULL,
+		job_type TEXT NOT NULL,
+		payload BLOB NOT NULL,
+		priority INTEGER NOT NULL DEFAULT 0,
+		max_retries INTEGER NOT NULL DEFAULT 0,
+		timeout INTEGER NOT NULL DEFAULT 0,
+		enabled BOOLEAN NOT NULL DEFAULT 1,
+		next_run TIMESTAMP,
+		last_run TIMESTAMP,
+		created_at TIMESTAMP NOT NULL,
+		updated_at TIMESTAMP NOT NULL
+	);
+	`
+	if _, err := q.db.Exec(cronSchema); err != nil {
+		return err
+	}
+
+	cronIndexSchema := `CREATE INDEX IF NOT EXISTS idx_cron_enabled_next_run ON cron_jobs(enabled, next_run);`
+	if _, err := q.db.Exec(cronIndexSchema); err != nil {
 		return err
 	}
 
@@ -344,7 +372,7 @@ func (q *SQLiteQueue) GetJob(ctx context.Context, jobID jobs.JobID) (*JobRecord,
 // ListJobsByStatus returns all jobs with a given status
 func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*JobRecord {
 	query := `
-		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at
+		SELECT id, type, payload, status, priority, attempts, max_retries, last_error, created_at, processed_at, scheduled_at, timeout
 		FROM jobs
 		WHERE status = ?
 		ORDER BY priority DESC, created_at DESC
@@ -368,6 +396,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 		var processedAt sql.NullTime
 		var lastError sql.NullString
 		var scheduledAt sql.NullTime
+		var timeoutNs int64
 
 		err := rows.Scan(
 			&record.ID,
@@ -381,6 +410,7 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 			&record.CreatedAt,
 			&processedAt,
 			&scheduledAt,
+			&timeoutNs,
 		)
 
 		if err != nil {
@@ -401,6 +431,8 @@ func (q *SQLiteQueue) ListJobsByStatus(ctx context.Context, status string) []*Jo
 		if scheduledAt.Valid {
 			record.ScheduledAt = &scheduledAt.Time
 		}
+
+		record.Timeout = time.Duration(timeoutNs)
 
 		records = append(records, &record)
 	}
@@ -462,6 +494,274 @@ func (q *SQLiteQueue) CancelJob(ctx context.Context, jobID jobs.JobID) error {
 		WHERE id = ?
 	`
 	_, err := q.db.ExecContext(ctx, query, time.Now(), jobID)
+	return err
+}
+
+// CreateCronJob creates a new cron job
+func (q *SQLiteQueue) CreateCronJob(ctx context.Context, cronJob *cron.CronJob) error {
+	if cronJob.JobType == "" {
+		return fmt.Errorf("job type cannot be empty")
+	}
+
+	parser := cronparser.NewParser(cronparser.Minute | cronparser.Hour | cronparser.Dom | cronparser.Month | cronparser.Dow)
+	if _, err := parser.Parse(cronJob.CronExpr); err != nil {
+		return fmt.Errorf("invalid cron expression: %w", err)
+	}
+
+	query := `
+		INSERT INTO cron_jobs (id, name, cron_expr, job_type, payload, priority, max_retries, timeout, enabled, next_run, last_run, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`
+
+	_, err := q.db.ExecContext(ctx, query,
+		cronJob.ID,
+		cronJob.Name,
+		cronJob.CronExpr,
+		cronJob.JobType,
+		cronJob.Payload,
+		cronJob.Priority,
+		cronJob.MaxRetries,
+		int64(cronJob.Timeout),
+		cronJob.Enabled,
+		cronJob.NextRun,
+		cronJob.LastRun,
+		cronJob.CreatedAt,
+		cronJob.UpdatedAt,
+	)
+
+	return err
+}
+
+// GetCronJob retrieves a cron job by ID
+func (q *SQLiteQueue) GetCronJob(ctx context.Context, id cron.CronJobID) (*cron.CronJob, bool) {
+	query := `
+		SELECT id, name, cron_expr, job_type, payload, priority, max_retries, timeout, enabled, next_run, last_run, created_at, updated_at
+		FROM cron_jobs
+		WHERE id = ?
+	`
+
+	var cronJob cron.CronJob
+	var payload []byte
+	var nextRun sql.NullTime
+	var lastRun sql.NullTime
+	var timeoutNs int64
+
+	err := q.db.QueryRowContext(ctx, query, id).Scan(
+		&cronJob.ID,
+		&cronJob.Name,
+		&cronJob.CronExpr,
+		&cronJob.JobType,
+		&payload,
+		&cronJob.Priority,
+		&cronJob.MaxRetries,
+		&timeoutNs,
+		&cronJob.Enabled,
+		&nextRun,
+		&lastRun,
+		&cronJob.CreatedAt,
+		&cronJob.UpdatedAt,
+	)
+
+	if err != nil {
+		return nil, false
+	}
+
+	cronJob.Payload = make([]byte, len(payload))
+	copy(cronJob.Payload, payload)
+	cronJob.Timeout = time.Duration(timeoutNs)
+
+	if nextRun.Valid {
+		cronJob.NextRun = &nextRun.Time
+	}
+	if lastRun.Valid {
+		cronJob.LastRun = &lastRun.Time
+	}
+
+	return &cronJob, true
+}
+
+// ListCronJobs returns all cron jobs
+func (q *SQLiteQueue) ListCronJobs(ctx context.Context) []*cron.CronJob {
+	query := `
+		SELECT id, name, cron_expr, job_type, payload, priority, max_retries, timeout, enabled, next_run, last_run, created_at, updated_at
+		FROM cron_jobs
+		ORDER BY name ASC
+	`
+
+	rows, err := q.db.QueryContext(ctx, query)
+	if err != nil {
+		return []*cron.CronJob{}
+	}
+	defer func() {
+		_ = rows.Close() //nolint:errcheck
+	}()
+
+	var cronJobs []*cron.CronJob
+	for rows.Next() {
+		var cronJob cron.CronJob
+		var payload []byte
+		var nextRun sql.NullTime
+		var lastRun sql.NullTime
+		var timeoutNs int64
+
+		err := rows.Scan(
+			&cronJob.ID,
+			&cronJob.Name,
+			&cronJob.CronExpr,
+			&cronJob.JobType,
+			&payload,
+			&cronJob.Priority,
+			&cronJob.MaxRetries,
+			&timeoutNs,
+			&cronJob.Enabled,
+			&nextRun,
+			&lastRun,
+			&cronJob.CreatedAt,
+			&cronJob.UpdatedAt,
+		)
+
+		if err != nil {
+			continue
+		}
+
+		cronJob.Payload = make([]byte, len(payload))
+		copy(cronJob.Payload, payload)
+		cronJob.Timeout = time.Duration(timeoutNs)
+
+		if nextRun.Valid {
+			cronJob.NextRun = &nextRun.Time
+		}
+		if lastRun.Valid {
+			cronJob.LastRun = &lastRun.Time
+		}
+
+		cronJobs = append(cronJobs, &cronJob)
+	}
+
+	return cronJobs
+}
+
+// ListEnabledCronJobs returns all enabled cron jobs
+func (q *SQLiteQueue) ListEnabledCronJobs(ctx context.Context) []*cron.CronJob {
+	query := `
+		SELECT id, name, cron_expr, job_type, payload, priority, max_retries, timeout, enabled, next_run, last_run, created_at, updated_at
+		FROM cron_jobs
+		WHERE enabled = 1
+		ORDER BY next_run ASC
+	`
+
+	rows, err := q.db.QueryContext(ctx, query)
+	if err != nil {
+		return []*cron.CronJob{}
+	}
+	defer func() {
+		_ = rows.Close() //nolint:errcheck
+	}()
+
+	var cronJobs []*cron.CronJob
+	for rows.Next() {
+		var cronJob cron.CronJob
+		var payload []byte
+		var nextRun sql.NullTime
+		var lastRun sql.NullTime
+		var timeoutNs int64
+
+		err := rows.Scan(
+			&cronJob.ID,
+			&cronJob.Name,
+			&cronJob.CronExpr,
+			&cronJob.JobType,
+			&payload,
+			&cronJob.Priority,
+			&cronJob.MaxRetries,
+			&timeoutNs,
+			&cronJob.Enabled,
+			&nextRun,
+			&lastRun,
+			&cronJob.CreatedAt,
+			&cronJob.UpdatedAt,
+		)
+
+		if err != nil {
+			continue
+		}
+
+		cronJob.Payload = make([]byte, len(payload))
+		copy(cronJob.Payload, payload)
+		cronJob.Timeout = time.Duration(timeoutNs)
+
+		if nextRun.Valid {
+			cronJob.NextRun = &nextRun.Time
+		}
+		if lastRun.Valid {
+			cronJob.LastRun = &lastRun.Time
+		}
+
+		cronJobs = append(cronJobs, &cronJob)
+	}
+
+	return cronJobs
+}
+
+// UpdateCronJob updates an existing cron job
+func (q *SQLiteQueue) UpdateCronJob(ctx context.Context, cronJob *cron.CronJob) error {
+	if cronJob.CronExpr != "" {
+		parser := cronparser.NewParser(cronparser.Minute | cronparser.Hour | cronparser.Dom | cronparser.Month | cronparser.Dow)
+		if _, err := parser.Parse(cronJob.CronExpr); err != nil {
+			return fmt.Errorf("invalid cron expression: %w", err)
+		}
+	}
+
+	_, exists := q.GetCronJob(ctx, cronJob.ID)
+	if !exists {
+		return fmt.Errorf("cron job not found")
+	}
+
+	query := `
+		UPDATE cron_jobs
+		SET name = ?, cron_expr = ?, job_type = ?, payload = ?, priority = ?, max_retries = ?, timeout = ?, enabled = ?, updated_at = ?
+		WHERE id = ?
+	`
+
+	_, err := q.db.ExecContext(ctx, query,
+		cronJob.Name,
+		cronJob.CronExpr,
+		cronJob.JobType,
+		cronJob.Payload,
+		cronJob.Priority,
+		cronJob.MaxRetries,
+		int64(cronJob.Timeout),
+		cronJob.Enabled,
+		time.Now(),
+		cronJob.ID,
+	)
+
+	return err
+}
+
+// DeleteCronJob deletes a cron job by ID
+func (q *SQLiteQueue) DeleteCronJob(ctx context.Context, id cron.CronJobID) error {
+	_, exists := q.GetCronJob(ctx, id)
+	if !exists {
+		return fmt.Errorf("cron job not found")
+	}
+
+	query := `DELETE FROM cron_jobs WHERE id = ?`
+	_, err := q.db.ExecContext(ctx, query, id)
+	return err
+}
+
+// UpdateCronJobNextRun updates the next run time for a cron job
+func (q *SQLiteQueue) UpdateCronJobNextRun(ctx context.Context, id cron.CronJobID, nextRun time.Time) error {
+	query := `UPDATE cron_jobs SET next_run = ?, updated_at = ? WHERE id = ?`
+	_, err := q.db.ExecContext(ctx, query, nextRun, time.Now(), id)
+	return err
+}
+
+// UpdateCronJobLastRun updates the last run time for a cron job
+func (q *SQLiteQueue) UpdateCronJobLastRun(ctx context.Context, id cron.CronJobID, lastRun time.Time) error {
+	query := `UPDATE cron_jobs SET last_run = ?, updated_at = ? WHERE id = ?`
+	_, err := q.db.ExecContext(ctx, query, lastRun, time.Now(), id)
 	return err
 }
 

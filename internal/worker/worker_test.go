@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/albachteng/jobqueue/internal/cron"
 	"github.com/albachteng/jobqueue/internal/jobs"
 	"github.com/albachteng/jobqueue/internal/queue"
 )
@@ -761,6 +762,38 @@ func (m *mockPersistentQueue) Close() error {
 }
 
 func (m *mockPersistentQueue) CancelJob(ctx context.Context, jobID jobs.JobID) error {
+	return nil
+}
+
+func (m *mockPersistentQueue) CreateCronJob(ctx context.Context, cronJob *cron.CronJob) error {
+	return nil
+}
+
+func (m *mockPersistentQueue) GetCronJob(ctx context.Context, id cron.CronJobID) (*cron.CronJob, bool) {
+	return nil, false
+}
+
+func (m *mockPersistentQueue) ListCronJobs(ctx context.Context) []*cron.CronJob {
+	return nil
+}
+
+func (m *mockPersistentQueue) ListEnabledCronJobs(ctx context.Context) []*cron.CronJob {
+	return nil
+}
+
+func (m *mockPersistentQueue) UpdateCronJob(ctx context.Context, cronJob *cron.CronJob) error {
+	return nil
+}
+
+func (m *mockPersistentQueue) DeleteCronJob(ctx context.Context, id cron.CronJobID) error {
+	return nil
+}
+
+func (m *mockPersistentQueue) UpdateCronJobNextRun(ctx context.Context, id cron.CronJobID, nextRun time.Time) error {
+	return nil
+}
+
+func (m *mockPersistentQueue) UpdateCronJobLastRun(ctx context.Context, id cron.CronJobID, lastRun time.Time) error {
 	return nil
 }
 

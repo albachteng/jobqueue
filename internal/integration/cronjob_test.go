@@ -197,11 +197,20 @@ func TestCronJob_EndToEnd(t *testing.T) {
 		payload := json.RawMessage(`{"message": "multi test"}`)
 		pastTime := time.Now().Add(-1 * time.Minute)
 
+		localCount := 0
+
+		// Register a separate handler just for this test
+		registry.MustRegister("multi-cron-echo", jobs.HandlerFunc(func(ctx context.Context, env *jobs.Envelope) error {
+			localCount++
+			t.Logf("Multi cron job executed, local count: %d", localCount)
+			return nil
+		}))
+
 		cron1 := &cron.CronJob{
 			ID:         "multi-cron-1",
 			Name:       "Multi Cron 1",
 			CronExpr:   "*/5 * * * *",
-			JobType:    "cron-echo",
+			JobType:    "multi-cron-echo",
 			Payload:    payload,
 			Enabled:    true,
 			NextRun:    &pastTime,
@@ -213,7 +222,7 @@ func TestCronJob_EndToEnd(t *testing.T) {
 			ID:         "multi-cron-2",
 			Name:       "Multi Cron 2",
 			CronExpr:   "*/10 * * * *",
-			JobType:    "cron-echo",
+			JobType:    "multi-cron-echo",
 			Payload:    payload,
 			Enabled:    true,
 			NextRun:    &pastTime,
@@ -224,8 +233,6 @@ func TestCronJob_EndToEnd(t *testing.T) {
 		persQueue.CreateCronJob(ctx, cron1)
 		persQueue.CreateCronJob(ctx, cron2)
 
-		beforeCount := executionCount
-
 		scheduler := cron.NewScheduler(persQueue, logger)
 		err = scheduler.ProcessDueJobs(ctx)
 		if err != nil {
@@ -234,9 +241,8 @@ func TestCronJob_EndToEnd(t *testing.T) {
 
 		time.Sleep(2 * time.Second)
 
-		expectedCount := beforeCount + 2
-		if executionCount != expectedCount {
-			t.Errorf("expected %d executions, got %d", expectedCount, executionCount)
+		if localCount != 2 {
+			t.Errorf("expected 2 executions, got %d", localCount)
 		}
 	})
 }
